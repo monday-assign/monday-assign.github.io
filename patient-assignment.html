@@ -344,8 +344,8 @@ function assignPatients(patients, roster, cfg) {
     if (!bridged) bridge = null;
     else info.push(`${bridge.name} also covers part of the ${towerName[heavy]} tower (${bridge.pts.filter(p => p.tower === heavy).length} patients) to even out numbers between the towers. ${bridge.name} is the roamer, the only doctor who covers both towers.`);
   }
-  // ---- with no roamer, when numbers can't come out exactly even, staying rounders take the extra patients ----
-  if (!bridge) ["EW", "NS"].forEach(t => {
+  // ---- when numbers can't come out exactly even, staying rounders take the extra patients (within their tower) ----
+  ["EW", "NS"].forEach(t => {
     for (let n = 0; n < 100; n++) {
       const team = rounders.filter(d => d.home === t);
       const st = team.filter(d => d.stay).sort((a, b) => a.pts.length - b.pts.length)[0];
@@ -358,6 +358,16 @@ function assignPatients(patients, roster, cfg) {
       take(nw, p); give(st, p, "Extra patient to a staying doctor (numbers can't be exactly even)");
     }
   });
+  // a staying roamer covers both towers, so they can also take an extra from a new doctor in either tower
+  if (bridge && bridge.stay) for (let n = 0; n < 100; n++) {
+    const nw = rounders.filter(d => !d.stay && d.pts.length > bridge.pts.length).sort((a, b) => b.pts.length - a.pts.length)[0];
+    if (!nw) break;
+    const movable = nw.pts.filter(p => !p.isED && !p.isNew && (p.tower === bridge.home || p.tower === heavy));
+    if (!movable.length) break;
+    const score = p => -10 * unitCount(bridge, p.unit) - (p.floor && bridge.pts.some(q => q.floor === p.floor && q.tower === p.tower) ? 3 : 0) + (p.spread || p.shared ? 50 : 0);
+    const p = movable.slice().sort((a, b) => score(a) - score(b) || b.i - a.i)[0];
+    take(nw, p); give(bridge, p, "Extra patient to a staying doctor (numbers can't be exactly even)");
+  }
   if (!bridge && !cfg.roamer && avgOf("EW") !== null && avgOf("NS") !== null && Math.abs(avgOf("EW") - avgOf("NS")) >= 1)
     info.push(`Roamer is off, so the towers are uneven: the old (E/W) tower averages ${avgOf("EW").toFixed(1)} patients per doctor and the new (N/S) tower ${avgOf("NS").toFixed(1)}. Tick "Allow a roamer" to even them out.`);
 

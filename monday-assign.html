@@ -295,6 +295,53 @@ function assignPatients(patients, roster, cfg) {
     }
   });
 
+  // ---- tidy-up by location: when a doctor holds a small leftover piece of a unit that a colleague mostly has,
+  //      swap patients one-for-one so the unit stays with one doctor (totals don't change) ----
+  const consolidate = () => {
+    const locked = (d, p) => p.isED || p.isNew || p.spread || kept(d, p);
+    const wardUnits = (pts) => new Set(pts.filter(p => !p.isED && !p.isNew).map(p => p.unit)).size;
+    for (let n = 0; n < 200; n++) {
+      let best = null;
+      rounders.forEach(Y => rounders.forEach(X => {
+        if (X === Y || X.home !== Y.home) return;
+        const pieces = {};
+        Y.pts.forEach(p => { if (!locked(Y, p) && p.tower === X.home) (pieces[p.unit] ||= []).push(p); });
+        Object.entries(pieces).forEach(([u, ps]) => {
+          if (unitCount(X, u) <= ps.length) return;            // X must hold the bigger part of this unit
+          const back = X.pts.filter(q => q.unit !== u && !locked(X, q) && q.tower === Y.home)
+            .sort((a, b) => (unitCount(Y, a.unit) ? 0 : 1) - (unitCount(Y, b.unit) ? 0 : 1) || unitCount(X, a.unit) - unitCount(X, b.unit) || b.i - a.i)
+            .slice(0, ps.length);
+          if (back.length < ps.length) return;
+          const X2 = X.pts.filter(q => !back.includes(q)).concat(ps), Y2 = Y.pts.filter(q => !ps.includes(q)).concat(back);
+          const gain = wardUnits(X.pts) + wardUnits(Y.pts) - wardUnits(X2) - wardUnits(Y2);
+          if (gain > 0 && (!best || gain > best.gain || (gain === best.gain && ps.length < best.ps.length))) best = { X, Y, ps, back, gain, u };
+        });
+      }));
+      if (!best) break;
+      best.ps.forEach(p => { take(best.Y, p); give(best.X, p, `Kept ${best.u} together with one doctor`); });
+      best.back.forEach(p => { take(best.X, p); give(best.Y, p, `Swapped so ${best.u} stays with one doctor`); });
+    }
+    // keep 7E/7W spread: no doctor with 2+ more high-demand patients than another (doctors holding a single unit are left alone)
+    for (let n = 0; n < 100; n++) {
+      const sc = d => d.pts.filter(p => p.shared).length;
+      const multi = rounders.filter(d => wardUnits(d.pts) > 1);
+      let pair = null, p = null, q = null;
+      const pairs = [];
+      multi.forEach(hi => multi.forEach(lo => { if (hi.home === lo.home && sc(hi) - sc(lo) >= 2) pairs.push({ hi, lo, d: sc(hi) - sc(lo) }); }));
+      pairs.sort((x, y) => y.d - x.d);
+      for (const c of pairs) {
+        const pp = c.hi.pts.filter(x => x.shared && !kept(c.hi, x)).sort((a, b) => unitCount(c.hi, a.unit) - unitCount(c.hi, b.unit))[0];
+        const qq = c.lo.pts.filter(x => !x.shared && !x.isED && !x.isNew && !x.spread && !kept(c.lo, x) && x.tower === c.hi.home)
+          .sort((a, b) => (unitCount(c.hi, b.unit) ? 1 : 0) - (unitCount(c.hi, a.unit) ? 1 : 0) || unitCount(c.lo, a.unit) - unitCount(c.lo, b.unit))[0];
+        if (pp && qq) { pair = c; p = pp; q = qq; break; }
+      }
+      if (!pair) break;
+      take(pair.hi, p); give(pair.lo, p, "Shared high-demand unit " + p.unit);
+      take(pair.lo, q); give(pair.hi, q, "Swapped to keep 7E/7W spread out");
+    }
+  };
+  consolidate();
+
   // ---- new admits: split evenly between admitting doctors ----
   newPool.forEach((p, n) => {
     if (admits.length) give(admits.slice().sort((a, b) => a.pts.length - b.pts.length)[0], p, "New admit");
@@ -370,6 +417,8 @@ function assignPatients(patients, roster, cfg) {
   }
   if (!bridge && !cfg.roamer && avgOf("EW") !== null && avgOf("NS") !== null && Math.abs(avgOf("EW") - avgOf("NS")) >= 1)
     info.push(`Roamer is off, so the towers are uneven: the old (E/W) tower averages ${avgOf("EW").toFixed(1)} patients per doctor and the new (N/S) tower ${avgOf("NS").toFixed(1)}. Tick "Allow a roamer" to even them out.`);
+
+  consolidate(); // final location tidy-up after all balancing (swaps only, totals unchanged)
 
   // ---- notes for the reviewer ----
   rounders.forEach(d => {

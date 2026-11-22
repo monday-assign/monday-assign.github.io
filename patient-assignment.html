@@ -258,13 +258,13 @@ function assignPatients(patients, roster, cfg) {
   const evenOut = allowED => {
     for (let n = 0; n < 500; n++) {
       let m = null;
-      rounders.filter(d => !d.stay || d.pts.length > cfg.cap).forEach(from => rounders.forEach(to => {
+      rounders.forEach(from => rounders.forEach(to => {
         const diff = from.pts.length - to.pts.length;
         if (to === from || diff < 2 || (m && diff <= m.diff)) return;
         const movable = from.pts.filter(p => (p.isED || p.isNew) ? allowED && from.ed > 1 : (p.tower === "?" || p.tower === to.home));
         if (!movable.length) return;
-        const score = p => (p.isED ? -20 : 0) - (to.pts.some(q => q.unit === p.unit) ? UNIT_BONUS : 0) + unitCount(from, p.unit) * 0.5
-          + (p.shared || p.spread ? 50 : 0);
+        const score = p => (p.isED ? -20 : 0) - (to.pts.some(q => q.unit === p.unit) ? UNIT_BONUS : 0) - (p.floor && to.pts.some(q => q.floor === p.floor && q.tower === p.tower) ? FLOOR_BONUS : 0)
+          + unitCount(from, p.unit) * 0.5 + (p.shared || p.spread ? 50 : 0);
         m = { diff, from, to, p: movable.slice().sort((a, b) => score(a) - score(b) || b.i - a.i)[0] };
       }));
       if (!m) break;
@@ -307,7 +307,7 @@ function assignPatients(patients, roster, cfg) {
     else give(lowest(rounders), p, "ED patient (no admitting doctor on the roster)");
   });
 
-  evenOut(false); // staying doctors over the limit give ward patients back to the pool-level evening
+  evenOut(false); // any doctor, staying ones too, who has 2 or more patients than a colleague in the same tower hands ward patients over, by location
 
   // ---- one exception: if someone is still over the limit, ONE new rounding doctor may also cover the other tower ----
   let bridge = null;

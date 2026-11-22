@@ -309,24 +309,34 @@ function assignPatients(patients, roster, cfg) {
 
   evenOut(false); // any doctor, staying ones too, who has 2 or more patients than a colleague in the same tower hands ward patients over, by location
 
-  // ---- one exception: if someone is still over the limit, ONE new rounding doctor may also cover the other tower ----
-  let bridge = null;
-  const heaviest = rounders.slice().sort((a, b) => b.pts.length - a.pts.length)[0];
-  if (heaviest.pts.length > cfg.cap && heaviest.home) {
-    const heavy = heaviest.home;
-    bridge = rounders.filter(d => !d.stay && d.home && d.home !== heavy).sort((a, b) => a.pts.length - b.pts.length)[0] || null;
-    let moved = 0;
-    while (bridge) {
-      const from = rounders.filter(d => d.home === heavy && d.pts.length > cfg.cap).sort((a, b) => b.pts.length - a.pts.length)[0];
-      if (!from || from.pts.length - bridge.pts.length < 2) break;
+  // ---- one exception: if the numbers are still uneven between the towers, ONE rounding doctor from the lighter tower
+  //      also takes patients from the heavier tower. Their own patients are then shared with their tower colleagues,
+  //      so the whole lighter tower comes up and the heavier tower comes down. ----
+  let bridge = null, bridged = 0, heavy = null;
+  const spreadAll = () => Math.max(...rounders.map(d => d.pts.length)) - Math.min(...rounders.map(d => d.pts.length));
+  const avgOf = t => { const l = rounders.filter(d => d.home === t); return l.length ? l.reduce((n, d) => n + d.pts.length, 0) / l.length : null; };
+  if (spreadAll() >= 2 && avgOf("EW") !== null && avgOf("NS") !== null && Math.abs(avgOf("EW") - avgOf("NS")) >= 1) {
+    heavy = avgOf("EW") > avgOf("NS") ? "EW" : "NS";
+    const light = heavy === "EW" ? "NS" : "EW";
+    const lightTeam = rounders.filter(d => d.home === light);
+    bridge = lightTeam.filter(d => !d.stay).sort((a, b) => a.pts.length - b.pts.length)[0] || lightTeam.sort((a, b) => a.pts.length - b.pts.length)[0];
+    for (let n = 0; n < 300 && bridge; n++) {
+      const from = rounders.filter(d => d !== bridge && d.pts.some(p => !p.isED && !p.isNew && p.tower === heavy))
+        .sort((a, b) => b.pts.length - a.pts.length)[0];
+      // keep going while the giver has 2+ more than the lightest doctor in the lighter tower (the bridge doctor passes patients on)
+      const lightMin = Math.min(...lightTeam.map(d => d.pts.length));
+      if (!from || from.pts.length - lightMin < 2 || from.pts.length - bridge.pts.length < 1) break;
       const movable = from.pts.filter(p => !p.isED && !p.isNew && p.tower === heavy);
-      if (!movable.length) break;
-      const p = movable.slice().sort((a, b) => unitCount(from, a.unit) - unitCount(from, b.unit) || (b.shared - a.shared) || b.i - a.i)[0];
-      take(from, p); give(bridge, p, `Moved to ${bridge.name}, who also covers the ${towerName[heavy]} tower, to keep ${from.name} within the limit`);
-      moved++;
+      // by location: keep the bridge doctor's patients from the other tower together, take from the giver's least common unit
+      const score = p => -10 * unitCount(bridge, p.unit) - (p.floor && bridge.pts.some(q => q.floor === p.floor && q.tower === heavy) ? 3 : 0)
+        + unitCount(from, p.unit) + (p.spread || p.shared ? 50 : 0);
+      const p = movable.slice().sort((a, b) => score(a) - score(b) || b.i - a.i)[0];
+      take(from, p); give(bridge, p, `Moved to ${bridge.name}, who also covers part of the other tower, to even out numbers`);
+      bridged++;
+      evenOut(false); // the bridge doctor passes some of their own-tower patients to colleagues
     }
-    if (!moved) bridge = null;
-    else info.push(`${bridge.name} also covers part of the ${towerName[heavy]} tower (${moved} patient${moved > 1 ? "s" : ""}) because the doctors there were over the limit. This is the only doctor allowed to cover both towers.`);
+    if (!bridged) bridge = null;
+    else info.push(`${bridge.name} also covers part of the ${towerName[heavy]} tower (${bridge.pts.filter(p => p.tower === heavy).length} patients) to even out numbers between the towers. This is the only doctor who covers both towers.`);
   }
 
   // ---- notes for the reviewer ----

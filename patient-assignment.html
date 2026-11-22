@@ -323,7 +323,9 @@ function assignPatients(patients, roster, cfg) {
     heavy = avgOf("EW") > avgOf("NS") ? "EW" : "NS";
     const light = heavy === "EW" ? "NS" : "EW";
     const lightTeam = rounders.filter(d => d.home === light);
-    bridge = lightTeam.filter(d => !d.stay).sort((a, b) => a.pts.length - b.pts.length)[0] || lightTeam.sort((a, b) => a.pts.length - b.pts.length)[0];
+    // a staying rounder in the lighter tower is preferred as the roamer; otherwise a new one
+    const byFewest = l => l.slice().sort((a, b) => a.pts.length - b.pts.length)[0];
+    bridge = byFewest(lightTeam.filter(d => d.stay)) || byFewest(lightTeam);
     for (let n = 0; n < 300 && bridge; n++) {
       const from = rounders.filter(d => d !== bridge && d.pts.some(p => !p.isED && !p.isNew && p.tower === heavy))
         .sort((a, b) => b.pts.length - a.pts.length)[0];
@@ -342,6 +344,20 @@ function assignPatients(patients, roster, cfg) {
     if (!bridged) bridge = null;
     else info.push(`${bridge.name} also covers part of the ${towerName[heavy]} tower (${bridge.pts.filter(p => p.tower === heavy).length} patients) to even out numbers between the towers. ${bridge.name} is the roamer, the only doctor who covers both towers.`);
   }
+  // ---- with no roamer, when numbers can't come out exactly even, staying rounders take the extra patients ----
+  if (!bridge) ["EW", "NS"].forEach(t => {
+    for (let n = 0; n < 100; n++) {
+      const team = rounders.filter(d => d.home === t);
+      const st = team.filter(d => d.stay).sort((a, b) => a.pts.length - b.pts.length)[0];
+      const nw = team.filter(d => !d.stay).sort((a, b) => b.pts.length - a.pts.length)[0];
+      if (!st || !nw || nw.pts.length <= st.pts.length) break;
+      const movable = nw.pts.filter(p => !p.isED && !p.isNew && p.tower === t);
+      if (!movable.length) break;
+      const score = p => -10 * unitCount(st, p.unit) - (p.floor && st.pts.some(q => q.floor === p.floor && q.tower === t) ? 3 : 0) + (p.spread || p.shared ? 50 : 0);
+      const p = movable.slice().sort((a, b) => score(a) - score(b) || b.i - a.i)[0];
+      take(nw, p); give(st, p, "Extra patient to a staying doctor (numbers can't be exactly even)");
+    }
+  });
   if (!bridge && !cfg.roamer && avgOf("EW") !== null && avgOf("NS") !== null && Math.abs(avgOf("EW") - avgOf("NS")) >= 1)
     info.push(`Roamer is off, so the towers are uneven: the old (E/W) tower averages ${avgOf("EW").toFixed(1)} patients per doctor and the new (N/S) tower ${avgOf("NS").toFixed(1)}. Tick "Allow a roamer" to even them out.`);
 

@@ -105,7 +105,7 @@
       <button id="dl">Download CSV</button>
       <span id="copied" class="muted"></span>
     </div>
-    <p class="help">In the output, the weekend doctor column becomes <b>Final</b>: it keeps only the names of staying doctors and is blank for everyone else. Next to it, <b>Suggested</b> shows every patient's suggested doctor (staying doctors by name, new doctors as A, B, C…). "Copy Final and Suggested columns" gives both columns, one row per patient in the original order, ready to paste over the weekend doctor column in your named list. You can change any patient with the dropdown; highlighted rows have a different doctor than on the weekend.</p>
+    <p class="help">In the output, the weekend doctor column becomes <b>Final</b>: it keeps the weekend doctor's name if that doctor is staying (even when Suggested gives the patient to someone else), and is blank for everyone else. Next to it, <b>Suggested</b> shows every patient's suggested doctor (staying doctors by name, new doctors as A, B, C…). "Copy Final and Suggested columns" gives both columns, one row per patient in the original order, ready to paste over the weekend doctor column in your named list. You can change any patient with the dropdown; highlighted rows have a different doctor than on the weekend.</p>
     <div class="row">
       <label>Show: <select id="filter"><option value="">All patients</option></select></label>
     </div>
@@ -521,8 +521,9 @@ $("#filter").onchange = renderResult;
 // ---- export: same rows, same order. The weekend doctor column becomes "Final" (staying doctors only, blank otherwise)
 //      and "Suggested" (every patient's suggested doctor) is inserted right after it ----
 function finalName(i) {
-  const d = S.result.docs.find(x => x.name === S.result.doctor[i]);
-  return d && d.stay ? d.name : "";
+  // keeps the weekend doctor's name when that doctor is staying, even if Suggested moves the patient elsewhere
+  const prev = String(S.rows[i][S.cDoc] || "").trim();
+  return S.result.docs.some(x => x.stay && x.name === prev) ? prev : "";
 }
 function exportRows() {
   const swap = (r, fin, sug) => [...r.slice(0, S.cDoc), fin, sug, ...r.slice(S.cDoc + 1)];

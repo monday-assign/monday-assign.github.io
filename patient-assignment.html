@@ -1,0 +1,530 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Privacy lock: this page is not allowed to contact any server. Everything happens inside your browser. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'">
+<title>Patient Assignment</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --ink:#1c2230; --muted:#5f6878; --line:#dce0e7; --accent:#1f5fd1; --accent-ink:#fff;
+          --warn-bg:#fff5dc; --warn:#7a5200; --bad-bg:#fdeaea; --bad:#a01f1f; --ok-bg:#e7f5ec; --ok:#17603a; --hi:#eaf1ff; --chg:#fff9e6; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14171c; --card:#1d2128; --ink:#e6e9ef; --muted:#9aa3b2; --line:#333a46; --accent:#6c9bff; --accent-ink:#0b0d10;
+          --warn-bg:#3a2f12; --warn:#f3cd72; --bad-bg:#3b1c1c; --bad:#ff9d9d; --ok-bg:#16301f; --ok:#8fe0ab; --hi:#1f2a44; --chg:#2e2a18; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  .wrap { max-width:1200px; margin:0 auto; padding:16px; }
+  h1 { font-size:22px; margin:6px 0 4px; }
+  h2 { font-size:17px; margin:0 0 8px; }
+  h3 { font-size:14px; margin:16px 0 6px; }
+  .lock { display:inline-block; background:var(--ok-bg); color:var(--ok); border-radius:6px; padding:3px 10px; font-size:13px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin:14px 0; }
+  .step { display:inline-block; width:26px; height:26px; line-height:26px; text-align:center; border-radius:50%; background:var(--accent); color:var(--accent-ink); font-weight:600; margin-right:8px; font-size:14px; }
+  p.help { color:var(--muted); margin:4px 0 10px; }
+  .box { border-radius:8px; padding:8px 12px; margin:8px 0; }
+  .warn { background:var(--warn-bg); color:var(--warn); } .bad { background:var(--bad-bg); color:var(--bad); } .ok { background:var(--ok-bg); color:var(--ok); }
+  table { border-collapse:collapse; font-size:13.5px; }
+  th, td { border-bottom:1px solid var(--line); padding:5px 9px; text-align:left; white-space:nowrap; }
+  th { background:var(--bg); position:sticky; top:0; z-index:1; }
+  td.n, th.n { text-align:right; font-variant-numeric:tabular-nums; }
+  td.zero { color:var(--line); }
+  td.total { font-weight:700; }
+  tr.over td.total { color:var(--bad); }
+  tr.changed { background:var(--chg); }
+  .scroll { max-height:520px; overflow:auto; border:1px solid var(--line); border-radius:8px; }
+  .scrollx { overflow-x:auto; border:1px solid var(--line); border-radius:8px; }
+  select, input[type=number], input[type=text], textarea { font:inherit; padding:4px 8px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--ink); }
+  input[type=number] { width:70px; }
+  textarea { width:100%; min-height:90px; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12.5px; }
+  button { font:inherit; padding:8px 16px; border-radius:8px; cursor:pointer; margin:4px 6px 4px 0; background:var(--card); color:var(--ink); border:1px solid var(--line); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  button.primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); font-weight:600; }
+  .row { display:flex; gap:18px; flex-wrap:wrap; align-items:center; margin:8px 0; }
+  .muted { color:var(--muted); }
+  .pill { display:inline-block; padding:0 8px; border-radius:10px; font-size:12px; border:1px solid var(--line); background:var(--bg); }
+  details { margin-top:10px; } summary { cursor:pointer; color:var(--muted); }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Patient Assignment</h1>
+  <span class="lock">🔒 Works offline. This page cannot send data anywhere; the list stays on this computer.</span>
+
+  <div class="card">
+    <h2><span class="step">1</span>Load the anonymized list</h2>
+    <p class="help">Choose the CSV file, or copy the rows from Excel and paste them in the box. Rows are never reordered or removed.</p>
+    <div class="row">
+      <input type="file" id="file" accept=".csv,.txt,.tsv">
+      <span class="muted">or</span>
+      <button id="togglePaste">Paste from Excel…</button>
+    </div>
+    <div id="pasteArea" class="hidden">
+      <textarea id="paste" placeholder="Paste the rows here"></textarea>
+      <button id="usePaste" class="primary">Use pasted rows</button>
+    </div>
+    <div id="loadInfo"></div>
+    <div id="stats"></div>
+    <div id="colPick" class="row hidden"></div>
+  </div>
+
+  <div class="card hidden" id="rosterCard">
+    <h2><span class="step">2</span>Monday roster</h2>
+    <p class="help">Mark what each weekend doctor is doing on Monday, then say how many new doctors are joining. New doctors are named Doctor A, B, C…</p>
+    <div class="scrollx"><table id="rosterTable"></table></div>
+    <div class="row">
+      <label>Rounding doctors on Monday (total, including those staying): <input type="number" id="newRound" min="0" max="40" value="9"></label>
+      <span class="muted" id="newRoundNote"></span>
+      <label>New admitting doctors: <input type="number" id="newAdmit" min="0" max="10" value="2"></label>
+    </div>
+    <details>
+      <summary>Settings (the rules we agreed; change only if needed)</summary>
+      <div class="row">
+        <label>Max patients per rounding doctor: <input type="number" id="cap" min="1" value="18"></label>
+      </div>
+      <div class="row">
+        <label>Shared high-demand units: <input type="text" id="shared" value="7E, 7W" size="14"></label>
+        <label>Split evenly on a floor: <input type="text" id="spread" value="4W: 4E, 4W" size="16"></label>
+        <label>Extra units in the new tower (N/S): <input type="text" id="nsExtra" value="NOU" size="10"></label>
+        <label>Extra units in the old tower (E/W): <input type="text" id="ewExtra" value="" size="10"></label>
+      </div>
+      <p class="help">"Split evenly on a floor" means: the unit before the colon is dealt out evenly among doctors based on the units after it. Separate several rules with a semicolon.</p>
+      <p class="help">Units ending in E or W are the old tower; units ending in N or S are the new tower; "ED" locations are the ED, which any doctor can cover.</p>
+    </details>
+    <div class="row"><button class="primary" id="run">Assign patients</button></div>
+  </div>
+
+  <div class="card hidden" id="resultCard">
+    <h2><span class="step">3</span>Review and export</h2>
+    <div id="warnings"></div>
+    <h3>Patients per doctor, by unit</h3>
+    <div class="scrollx"><table id="summary"></table></div>
+    <div class="row">
+      <button class="primary" id="copyCol">Copy "Monday doctor" column</button>
+      <button id="copyAll">Copy whole table</button>
+      <button id="dl">Download CSV</button>
+      <span id="copied" class="muted"></span>
+    </div>
+    <p class="help">"Copy Monday doctor column" gives one doctor per row, in the original row order, ready to paste beside your named list. You can change any patient with the dropdown; highlighted rows have a different doctor than on the weekend.</p>
+    <div class="row">
+      <label>Show: <select id="filter"><option value="">All patients</option></select></label>
+    </div>
+    <div class="scroll"><table id="patients"></table></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* =====================================================================
+   ASSIGNMENT LOGIC (pure functions, no page access)
+   ===================================================================== */
+const TOWER_PENALTY = 8, UNIT_BONUS = 3, FLOOR_BONUS = 1, SHARED_PENALTY = 4;
+
+function listOf(s) { return String(s || "").split(/[,;]+/).map(x => x.trim().toUpperCase()).filter(Boolean); }
+
+// "LGH 4E 404 01" -> unit 4E ; "LGH ED Hold AC 202" -> unit ED ; "LGH NOU 6034 01" -> unit NOU
+function parseLocation(loc, site, cfg) {
+  let t = String(loc || "").trim().split(/\s+/).filter(Boolean);
+  if (site && t.length > 1 && t[0].toUpperCase() === site) t = t.slice(1);
+  const unit = (t[0] || "?").toUpperCase();
+  const isED = unit === "ED" || unit === "ER" || unit === "EMERG";
+  let tower = "?";
+  if (isED) tower = "ED";
+  else if (cfg.nsExtra.includes(unit)) tower = "NS";
+  else if (cfg.ewExtra.includes(unit)) tower = "EW";
+  else if (/^\d+[EW]$/.test(unit)) tower = "EW";
+  else if (/^\d+[NS]$/.test(unit)) tower = "NS";
+  const fm = unit.match(/^\d+/);
+  return { unit: isED ? "ED" : unit, tower, isED, floor: fm ? fm[0] : "", shared: cfg.shared.includes(unit), spread: !!(cfg.spread || {})[unit] };
+}
+function commonSite(locs) {
+  const firsts = new Set(locs.map(l => String(l || "").trim().split(/\s+/)[0].toUpperCase()).filter(Boolean));
+  return firsts.size === 1 ? [...firsts][0] : "";
+}
+const isBlank = doc => !String(doc || "").trim();
+const isNewAdmit = doc => /new\s*adm/i.test(doc) || /to be seen/i.test(doc);
+
+/* patients: [{loc, prev}] in original order
+   roster:   { status: {weekendDoctorName: "leave" | "round" | "admit"}, newRound, newAdmit }
+   cfg:      { cap, shared:[...], nsExtra:[...], ewExtra:[...] }
+   returns   { doctor:[name per patient], reason:[text per patient], docs:[{name, role, stay}], warnings:[...], info:[...] } */
+function assignPatients(patients, roster, cfg) {
+  const warnings = [], info = [];
+  const site = commonSite(patients.map(p => p.loc));
+  const P = patients.map((p, i) => Object.assign({ i, prev: String(p.prev || "").trim(), isNew: isNewAdmit(p.prev) }, parseLocation(p.loc, site, cfg)));
+  const out = new Array(P.length).fill(""), reason = new Array(P.length).fill("");
+
+  const docs = [];
+  const mkDoc = (name, role, stay) => { const d = { name, role, stay, home: null, pts: [], ed: 0 }; docs.push(d); return d; };
+  const give = (d, p, why) => { d.pts.push(p); out[p.i] = d.name; reason[p.i] = why; if (p.isED) d.ed++; };
+  const take = (d, p) => { d.pts.splice(d.pts.indexOf(p), 1); if (p.isED) d.ed--; };
+  const status = n => roster.status[n] || "leave";
+
+  // ---- staying doctors and their home tower ----
+  const stay = {};
+  Object.keys(roster.status).forEach(n => { if (status(n) !== "leave") stay[n] = mkDoc(n, status(n) === "admit" ? "A" : "R", true); });
+  Object.values(stay).forEach(d => {
+    const c = { EW: 0, NS: 0 };
+    P.forEach(p => { if (!p.isNew && p.prev === d.name && c[p.tower] !== undefined) c[p.tower]++; });
+    d.home = c.EW + c.NS === 0 ? null : (c.EW >= c.NS ? "EW" : "NS");
+  });
+
+  // ---- sort every patient into: kept by a staying doctor / tower pool / ED pool / new admits ----
+  // Patients of leaving doctors are pooled; nothing is inherited from the previous doctor.
+  const pool = { EW: [], NS: [], "?": [] }, edPool = [], newPool = [];
+  P.forEach(p => {
+    if (p.isNew) { newPool.push(p); return; }
+    const s = stay[p.prev];
+    if (s && s.role === "R" && (p.isED || p.tower === "?" || p.tower === s.home)) give(s, p, "Kept (staying doctor)");
+    else if (s && s.role === "A" && p.isED) give(s, p, "Kept (staying admitting doctor)");
+    else if (p.isED) edPool.push(p);
+    else pool[p.tower].push(p);
+  });
+
+  // ---- how many rounding doctors each tower gets (a doctor never covers both towers, except one in the final step) ----
+  const wardBy = { EW: 0, NS: 0 };
+  P.forEach(p => { if (!p.isNew && !p.isED && wardBy[p.tower] !== undefined) wardBy[p.tower]++; });
+  const stayR = Object.values(stay).filter(d => d.role === "R");
+  const nDocs = { EW: stayR.filter(d => d.home === "EW").length, NS: stayR.filter(d => d.home === "NS").length };
+  const homeless = stayR.filter(d => !d.home);
+  const flex = roster.newRound + homeless.length;
+  const perDoc = (w, n) => w === 0 ? 0 : n === 0 ? Infinity : w / n;
+  let split = null;
+  for (let e = 0; e <= flex; e++) {
+    const a = perDoc(wardBy.EW, nDocs.EW + e), b = perDoc(wardBy.NS, nDocs.NS + flex - e);
+    const key = [Math.max(Math.ceil(a), Math.ceil(b)), Math.abs(a - b)];
+    if (!split || key[0] < split.key[0] || (key[0] === split.key[0] && key[1] < split.key[1])) split = { e, key };
+  }
+  const newIn = { EW: split.e, NS: flex - split.e };
+  nDocs.EW += newIn.EW; nDocs.NS += newIn.NS;
+  homeless.forEach(d => { d.home = newIn.EW > 0 ? "EW" : "NS"; newIn[d.home]--; });
+
+  const letter = k => "Doctor " + (k < 26 ? String.fromCharCode(65 + k) : "A" + String.fromCharCode(65 + k - 26));
+  let k = 0;
+  ["EW", "NS"].forEach(t => { for (let j = 0; j < newIn[t]; j++) mkDoc(letter(k++), "R", false).home = t; });
+  for (let j = 0; j < roster.newAdmit; j++) mkDoc(letter(k++), "A", false);
+
+  const rounders = docs.filter(d => d.role === "R"), admits = docs.filter(d => d.role === "A");
+  if (!rounders.length) { warnings.push("There are no rounding doctors on the Monday roster, so nothing was assigned."); return { doctor: out, reason, docs, warnings, info, P }; }
+
+  const towerName = { EW: "old (E/W)", NS: "new (N/S)" };
+  const unitCount = (d, u) => d.pts.filter(p => p.unit === u).length;
+  const nat = (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true });
+  const byPlace = (a, b) => nat(a.unit, b.unit) || nat(patients[a.i].loc, patients[b.i].loc) || a.i - b.i;
+  const fewest = list => list.slice().sort((a, b) => a.pts.length - b.pts.length || a.stay - b.stay)[0];
+
+  ["EW", "NS"].forEach(t => {
+    const team = rounders.filter(d => d.home === t);
+    if (!team.length) {
+      if (wardBy[t]) warnings.push(`No rounding doctor is left for the ${towerName[t]} tower, so its ${wardBy[t]} ward patients went to doctors in the other tower. Add a rounding doctor to fix this.`);
+      pool[t].sort(byPlace).forEach(p => give(fewest(rounders), p, "No doctor available in this tower"));
+      return;
+    }
+    const limit = Math.ceil(wardBy[t] / team.length);
+    if (limit > cfg.cap) info.push(`The ${towerName[t]} tower has ${wardBy[t]} ward patients for ${team.length} doctors, so they carry up to ${limit} each rather than cross towers.`);
+
+    // 1. shared high-demand units (7E, 7W): dealt out evenly across the whole tower team
+    const sharedCount = d => d.pts.filter(q => q.shared).length;
+    pool[t].filter(p => p.shared).sort(byPlace).forEach(p => {
+      const d = team.slice().sort((a, b) => sharedCount(a) - sharedCount(b) || unitCount(a, p.unit) - unitCount(b, p.unit) || a.pts.length - b.pts.length)[0];
+      give(d, p, "Shared high-demand unit " + p.unit);
+    });
+
+    // 2. how many of the remaining pooled patients each doctor takes, so totals come out level
+    //    (new doctors are topped up before staying doctors)
+    let rest = pool[t].filter(p => !p.shared).sort(byPlace);
+    const quota = new Map(team.map(d => [d, 0]));
+    for (let n = 0; n < rest.length; n++) {
+      const d = team.slice().sort((a, b) => (a.pts.length + quota.get(a)) - (b.pts.length + quota.get(b)) || a.stay - b.stay)[0];
+      quota.set(d, quota.get(d) + 1);
+    }
+
+    // 3. staying doctors top up with the pooled patients closest to the ones they already have
+    team.filter(d => d.stay).forEach(d => {
+      for (let n = 0; n < quota.get(d); n++) {
+        const near = p => unitCount(d, p.unit) ? -unitCount(d, p.unit)
+          : 100 + Math.min(...d.pts.filter(q => q.floor).map(q => Math.abs(q.floor - p.floor)), 50);
+        const p = rest.slice().sort((a, b) => near(a) - near(b) || byPlace(a, b))[0];
+        rest.splice(rest.indexOf(p), 1); give(d, p, "Added to a staying doctor (nearby patient)");
+      }
+    });
+
+    // 4. new doctors take the rest in order of location, so each gets neighbouring beds
+    team.filter(d => !d.stay).forEach(d => rest.splice(0, quota.get(d)).forEach(p => give(d, p, "Pooled and shared out by location")));
+  });
+  pool["?"].forEach(p => give(fewest(rounders), p, "Unit with unknown tower"));
+
+  // ---- evening-out: ward patients only move within their tower; staying doctors never give patients away ----
+  const evenOut = allowED => {
+    for (let n = 0; n < 500; n++) {
+      let m = null;
+      rounders.filter(d => !d.stay || d.pts.length > cfg.cap).forEach(from => rounders.forEach(to => {
+        const diff = from.pts.length - to.pts.length;
+        if (to === from || diff < 2 || (m && diff <= m.diff)) return;
+        const movable = from.pts.filter(p => (p.isED || p.isNew) ? allowED && from.ed > 1 : (p.tower === "?" || p.tower === to.home));
+        if (!movable.length) return;
+        const score = p => (p.isED ? -20 : 0) - (to.pts.some(q => q.unit === p.unit) ? UNIT_BONUS : 0) + unitCount(from, p.unit) * 0.5
+          + (p.shared || p.spread ? 50 : 0);
+        m = { diff, from, to, p: movable.slice().sort((a, b) => score(a) - score(b) || b.i - a.i)[0] };
+      }));
+      if (!m) break;
+      take(m.from, m.p); give(m.to, m.p, "Moved to even out numbers");
+    }
+  };
+
+  // ---- units split evenly among the doctors working that floor (e.g. 4W among the 4E/4W doctors), by swapping so totals stay the same ----
+  const kept = (d, p) => d.stay && p.prev === d.name;
+  Object.entries(cfg.spread || {}).forEach(([u, grp]) => {
+    for (let n = 0; n < 200; n++) {
+      const cands = rounders.filter(d => d.pts.filter(q => grp.includes(q.unit)).length >= 3);
+      const givers = cands.filter(d => unitCount(d, u) > 0).sort((x, y) => unitCount(y, u) - unitCount(x, u));
+      const hi = givers[0];
+      const lo = cands.filter(d => hi && d.home === hi.home).sort((x, y) => unitCount(x, u) - unitCount(y, u))[0];
+      if (!hi || !lo || hi === lo || unitCount(hi, u) - unitCount(lo, u) < 2) break;
+      // an even split of this unit comes before "staying doctors keep their patients":
+      // a staying doctor with too many gives some up and takes a neighbouring patient in exchange
+      const pick = (d, l) => l.filter(q => !kept(d, q)).pop() || l[l.length - 1];
+      const p = pick(hi, hi.pts.filter(q => q.unit === u));
+      const back = pick(lo, lo.pts.filter(q => q.unit !== u && grp.includes(q.unit)));
+      take(hi, p); give(lo, p, `${u} split evenly among the ${grp.join("/")} doctors`);
+      if (back) { take(lo, back); give(hi, back, `Swapped to keep numbers even while splitting ${u}`); }
+    }
+  });
+
+  // ---- new admits: split evenly between admitting doctors ----
+  newPool.forEach((p, n) => {
+    if (admits.length) give(admits.slice().sort((a, b) => a.pts.length - b.pts.length)[0], p, "New admit");
+    else edPool.push(p);
+  });
+  if (newPool.length && !admits.length) warnings.push("There are new admits but no admitting doctors, so they were shared among the rounding doctors.");
+
+  // ---- ED patients: every rounding doctor (staying ones too) gets one; the rest are divided between the admitting doctors ----
+  const lowest = list => list.slice().sort((a, b) => a.pts.length - b.pts.length || a.ed - b.ed)[0];
+  edPool.forEach(p => {
+    const d = lowest(rounders.filter(r => r.ed < 1));
+    if (d) give(d, p, "ED patient (one per rounding doctor)");
+    else if (admits.length) give(lowest(admits), p, "ED patient shared between the admitting doctors");
+    else give(lowest(rounders), p, "ED patient (no admitting doctor on the roster)");
+  });
+
+  evenOut(false); // staying doctors over the limit give ward patients back to the pool-level evening
+
+  // ---- one exception: if someone is still over the limit, ONE new rounding doctor may also cover the other tower ----
+  let bridge = null;
+  const heaviest = rounders.slice().sort((a, b) => b.pts.length - a.pts.length)[0];
+  if (heaviest.pts.length > cfg.cap && heaviest.home) {
+    const heavy = heaviest.home;
+    bridge = rounders.filter(d => !d.stay && d.home && d.home !== heavy).sort((a, b) => a.pts.length - b.pts.length)[0] || null;
+    let moved = 0;
+    while (bridge) {
+      const from = rounders.filter(d => d.home === heavy && d.pts.length > cfg.cap).sort((a, b) => b.pts.length - a.pts.length)[0];
+      if (!from || from.pts.length - bridge.pts.length < 2) break;
+      const movable = from.pts.filter(p => !p.isED && !p.isNew && p.tower === heavy);
+      if (!movable.length) break;
+      const p = movable.slice().sort((a, b) => unitCount(from, a.unit) - unitCount(from, b.unit) || (b.shared - a.shared) || b.i - a.i)[0];
+      take(from, p); give(bridge, p, `Moved to ${bridge.name}, who also covers the ${towerName[heavy]} tower, to keep ${from.name} within the limit`);
+      moved++;
+    }
+    if (!moved) bridge = null;
+    else info.push(`${bridge.name} also covers part of the ${towerName[heavy]} tower (${moved} patient${moved > 1 ? "s" : ""}) because the doctors there were over the limit. This is the only doctor allowed to cover both towers.`);
+  }
+
+  // ---- notes for the reviewer ----
+  rounders.forEach(d => {
+    if (d.pts.length > cfg.cap) warnings.push(`${d.name} has ${d.pts.length} patients, above the maximum of ${cfg.cap}.`);
+    const t = new Set(d.pts.map(p => p.tower).filter(x => x === "EW" || x === "NS"));
+    if (t.size > 1 && d !== bridge) warnings.push(`${d.name} covers both towers (${d.pts.filter(p => p.tower === "EW").length} in E/W, ${d.pts.filter(p => p.tower === "NS").length} in N/S).`);
+  });
+  const unknown = [...new Set(P.filter(p => p.tower === "?").map(p => p.unit))];
+  if (unknown.length) warnings.push(`I could not tell which tower these units are in: ${unknown.join(", ")}. Add them under Settings, then assign again.`);
+  if (out.some(x => !x)) warnings.push("Some patients were not assigned. Check them in the table below.");
+  return { doctor: out, reason, docs: docs.map(d => ({ name: d.name, role: d.role, stay: d.stay, from: d.from || "" })), warnings, info, P };
+}
+
+/* =====================================================================
+   PAGE
+   ===================================================================== */
+const $ = s => document.querySelector(s);
+const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const natural = (a, b) => a.localeCompare(b, undefined, { numeric: true });
+
+function parseTable(text) {
+  text = text.replace(/^﻿/, "");
+  const delim = text.split(/\r?\n/, 1)[0].includes("\t") ? "\t" : ",";
+  const rows = []; let row = [], cell = "", q = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (q) { if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else q = false; } else cell += ch; }
+    else if (ch === '"' && cell === "") q = true;
+    else if (ch === delim) { row.push(cell); cell = ""; }
+    else if (ch === "\n" || ch === "\r") { if (ch === "\r" && text[i + 1] === "\n") i++; row.push(cell); rows.push(row); row = []; cell = ""; }
+    else cell += ch;
+  }
+  if (cell !== "" || row.length) { row.push(cell); rows.push(row); }
+  return rows.filter(r => r.some(c => c.trim() !== ""));
+}
+const csvCell = v => /[",\r\n]/.test(v) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v);
+
+let S = { rows: [], header: null, cId: 0, cLoc: 1, cDoc: 2, result: null, weekend: [] };
+
+$("#file").onchange = async e => { const f = e.target.files[0]; if (f) loadText(await f.text(), f.name); };
+$("#togglePaste").onclick = () => $("#pasteArea").classList.toggle("hidden");
+$("#usePaste").onclick = () => { if ($("#paste").value.trim()) loadText($("#paste").value, "pasted rows"); };
+
+function loadText(text, label) {
+  let rows = parseTable(text);
+  if (!rows.length) { $("#loadInfo").innerHTML = `<div class="box bad">I could not find any rows in ${esc(label)}.</div>`; return; }
+  const width = Math.max(...rows.map(r => r.length));
+  rows.forEach(r => { while (r.length < width) r.push(""); });
+  // a first row with no digits anywhere is treated as a header row
+  S.header = rows.length > 1 && !rows[0].some(c => /\d/.test(c)) ? rows.shift() : null;
+  S.rows = rows;
+  // guess the columns
+  const score = (c, re) => rows.filter(r => re.test(r[c])).length;
+  const cols = [...Array(width).keys()];
+  S.cDoc = cols.slice().sort((a, b) => score(b, /,|\bMD\b|new adm/i) - score(a, /,|\bMD\b|new adm/i))[0];
+  S.cLoc = cols.filter(c => c !== S.cDoc).sort((a, b) => score(b, /[A-Za-z].*\d|\bED\b/) - score(a, /[A-Za-z].*\d|\bED\b/))[0] ?? 1;
+  S.cId = cols.filter(c => c !== S.cDoc && c !== S.cLoc).sort((a, b) => score(b, /^\s*\d+\s*$/) - score(a, /^\s*\d+\s*$/))[0] ?? 0;
+  $("#loadInfo").innerHTML = `<div class="box ok">Loaded <b>${rows.length}</b> patients from ${esc(label)}${S.header ? " (first row used as headings)" : ""}.</div>`;
+  const name = c => S.header ? `${S.header[c] || "Column " + (c + 1)}` : `Column ${c + 1} (e.g. ${String(rows[0][c]).slice(0, 22) || "empty"})`;
+  const sel = (id, lab, v) => `<label>${lab}: <select id="${id}">${cols.map(c => `<option value="${c}" ${c === v ? "selected" : ""}>${esc(name(c))}</option>`).join("")}</select></label>`;
+  $("#colPick").innerHTML = sel("cId", "Patient number", S.cId) + sel("cLoc", "Bed location", S.cLoc) + sel("cDoc", "Weekend doctor", S.cDoc);
+  $("#colPick").classList.remove("hidden");
+  ["cId", "cLoc", "cDoc"].forEach(id => $("#" + id).onchange = e => { S[id] = +e.target.value; buildRoster(); });
+  buildRoster();
+}
+
+function parseSpread(v) {
+  const m = {};
+  String(v || "").split(";").forEach(r => { const [u, g] = r.split(":"); if (u && g && listOf(g).length) m[u.trim().toUpperCase()] = listOf(g); });
+  return m;
+}
+function getCfg() {
+  return { cap: Math.max(1, +$("#cap").value || 18),            shared: listOf($("#shared").value), spread: parseSpread($("#spread").value), nsExtra: listOf($("#nsExtra").value), ewExtra: listOf($("#ewExtra").value) };
+}
+function patientsNow() { return S.rows.map(r => ({ loc: r[S.cLoc], prev: r[S.cDoc] })); }
+
+function buildRoster() {
+  const cfg = getCfg(), pts = patientsNow(), site = commonSite(pts.map(p => p.loc));
+  const by = {};
+  pts.forEach(p => {
+    if (isNewAdmit(p.prev) || isBlank(p.prev)) return;
+    const n = String(p.prev).trim(), L = parseLocation(p.loc, site, cfg);
+    (by[n] ||= { total: 0, units: {} }).total++; by[n].units[L.unit] = (by[n].units[L.unit] || 0) + 1;
+  });
+  const prevSel = {};
+  document.querySelectorAll("#rosterTable select").forEach(s => prevSel[s.dataset.doc] = s.value);
+  S.weekend = Object.keys(by).sort((a, b) => by[b].total - by[a].total || a.localeCompare(b));
+  $("#rosterTable").innerHTML = `<thead><tr><th>Weekend doctor</th><th class="n">Patients</th><th>Where</th><th>On Monday</th></tr></thead><tbody>` +
+    S.weekend.map(n => `<tr><td>${esc(n)}</td><td class="n">${by[n].total}</td>
+      <td class="muted">${Object.entries(by[n].units).sort((a, b) => b[1] - a[1]).map(([u, c]) => `${esc(u)} ${c}`).join(" · ")}</td>
+      <td><select data-doc="${esc(n)}">
+        <option value="leave">Leaving</option><option value="round">Staying, rounding</option><option value="admit">Staying, admitting</option>
+      </select></td></tr>`).join("") + `</tbody>`;
+  document.querySelectorAll("#rosterTable select").forEach(s => { if (prevSel[s.dataset.doc]) s.value = prevSel[s.dataset.doc]; });
+  const na = pts.filter(p => isNewAdmit(p.prev)).length;
+  $("#loadInfo").querySelectorAll(".newadmit").forEach(x => x.remove());
+  const blanks = S.rows.filter(r => isBlank(r[S.cDoc]));
+  if (blanks.length) {
+    const ids = blanks.map(r => String(r[S.cId]).trim() || "(no number)");
+    $("#loadInfo").insertAdjacentHTML("beforeend", `<div class="box bad newadmit"><b>${blanks.length} row(s) have an empty Weekend doctor cell</b> (patient no. ${esc(ids.slice(0, 30).join(", "))}${ids.length > 30 ? ", …" : ""}).
+      Fill in the doctor's name, or type "New admit" if the patient is waiting to be seen, then load the list again. Assigning is turned off until this is fixed.</div>`);
+  }
+  $("#run").disabled = blanks.length > 0;
+
+  // numbers at a glance
+  const c = { EW: 0, NS: 0, ED: 0, "?": 0, NEW: 0 };
+  pts.forEach(p => { if (isBlank(p.prev)) return; if (isNewAdmit(p.prev)) c.NEW++; else c[parseLocation(p.loc, site, cfg).tower]++; });
+  const line = (label, n, note) => `<tr><td>${label}</td><td class="n"><b>${n}</b></td><td class="muted">${note}</td></tr>`;
+  $("#stats").innerHTML = `<h3>Numbers</h3><div class="scrollx" style="display:inline-block"><table>
+    ${line("<b>Total patients</b>", pts.length, "")}
+    ${line("Old tower", c.EW, "units ending in E or W" + (cfg.ewExtra.length ? ", " + esc(cfg.ewExtra.join(", ")) : ""))}
+    ${line("New tower", c.NS, "units ending in N or S" + (cfg.nsExtra.length ? ", " + esc(cfg.nsExtra.join(", ")) : ""))}
+    ${line("ED", c.ED, "admitted patients still in the ED")}
+    ${line("New admits", c.NEW, "waiting to be seen")}
+    ${c["?"] ? line("Unknown unit", c["?"], "tower not recognized; add the unit under Settings") : ""}
+    ${blanks.length ? line("Empty doctor cell", blanks.length, "fix before assigning") : ""}
+  </table></div>`;
+  if (na) $("#loadInfo").insertAdjacentHTML("beforeend", `<div class="box ok newadmit">${na} row(s) are new admits waiting to be seen.</div>`);
+  $("#rosterCard").classList.remove("hidden"); updateNewNote();
+  $("#resultCard").classList.add("hidden");
+}
+
+function updateNewNote() {
+  const stayN = [...document.querySelectorAll("#rosterTable select")].filter(s => s.value === "round").length;
+  const total = +$("#newRound").value || 0;
+  $("#newRoundNote").textContent = total < stayN ? `⚠ ${stayN} rounding doctors are staying, which is more than ${total}.` : `${stayN} staying + ${total - stayN} new (named Doctor A, B…)`;
+}
+$("#newRound").oninput = updateNewNote;
+$("#rosterTable").onchange = updateNewNote;
+$("#run").onclick = () => {
+  const status = {};
+  document.querySelectorAll("#rosterTable select").forEach(s => status[s.dataset.doc] = s.value);
+  const stayN = Object.values(status).filter(v => v === "round").length;
+  const roster = { status, newRound: Math.max(0, (+$("#newRound").value || 0) - stayN), newAdmit: Math.max(0, +$("#newAdmit").value || 0) };
+  S.cfg = getCfg();
+  S.result = assignPatients(patientsNow(), roster, S.cfg);
+  S.result.auto = S.result.doctor.slice();
+  $("#filter").innerHTML = `<option value="">All patients</option><option value="__changed">Only patients changing doctor</option>` + S.result.docs.map(d => `<option>${esc(d.name)}</option>`).join("");
+  renderResult();
+  $("#resultCard").classList.remove("hidden");
+  $("#resultCard").scrollIntoView({ behavior: "smooth" });
+};
+
+function renderResult() {
+  const R = S.result, P = R.P;
+  // summary matrix
+  const units = [...new Set(P.map(p => p.isNew ? "New admit" : p.unit))];
+  const rank = u => u === "New admit" ? 3 : u === "ED" ? 2 : (P.find(p => p.unit === u)?.tower === "NS" ? 1 : 0);
+  units.sort((a, b) => rank(a) - rank(b) || natural(a, b));
+  const count = {}; R.docs.forEach(d => count[d.name] = { total: 0 });
+  P.forEach(p => { const c = count[R.doctor[p.i]]; if (!c) return; const u = p.isNew ? "New admit" : p.unit; c[u] = (c[u] || 0) + 1; c.total++; });
+  const roleName = d => (d.role === "R" ? "Rounding" : "Admitting") + (d.stay ? ", staying" : ", new");
+  $("#summary").innerHTML = `<thead><tr><th>Monday doctor</th><th>Role</th><th class="n">Total</th>${units.map(u => `<th class="n">${esc(u)}</th>`).join("")}<th>Mostly on</th></tr></thead><tbody>` +
+    R.docs.map(d => `<tr class="${d.role === "R" && count[d.name].total > S.cfg.cap ? "over" : ""}"><td><b>${esc(d.name)}</b></td><td class="muted">${roleName(d)}</td><td class="n total">${count[d.name].total}</td>
+      ${units.map(u => `<td class="n ${count[d.name][u] ? "" : "zero"}">${count[d.name][u] || "·"}</td>`).join("")}<td class="muted">${esc(units.filter(u => count[d.name][u]).sort((x, y) => count[d.name][y] - count[d.name][x]).slice(0, 2).join(", "))}</td></tr>`).join("") +
+    `<tr><td><b>All</b></td><td></td><td class="n total">${P.length}</td>${units.map(u => `<td class="n">${P.filter(p => (p.isNew ? "New admit" : p.unit) === u).length}</td>`).join("")}<td></td></tr></tbody>`;
+
+  // warnings (recomputed for manual edits)
+  const over = R.docs.filter(d => d.role === "R" && count[d.name].total > S.cfg.cap).map(d => `${d.name} has ${count[d.name].total} patients, above the maximum of ${S.cfg.cap}.`);
+  const warn = [...new Set([...R.warnings.filter(w => !/above the maximum/.test(w)), ...over])];
+  const rc = R.docs.filter(d => d.role === "R").map(d => count[d.name].total);
+  $("#warnings").innerHTML =
+    (warn.length ? warn.map(w => `<div class="box bad">${esc(w)}</div>`).join("") : `<div class="box ok">All ${P.length} patients are assigned. Rounding doctors have between ${Math.min(...rc)} and ${Math.max(...rc)} patients each.</div>`) +
+    R.info.map(w => `<div class="box warn">${esc(w)}</div>`).join("");
+
+  // patient table
+  const f = $("#filter").value;
+  const names = R.docs.map(d => d.name);
+  const show = p => !f || (f === "__changed" ? R.doctor[p.i] !== p.prev : R.doctor[p.i] === f);
+  $("#patients").innerHTML = `<thead><tr><th>Patient no.</th><th>Bed</th><th>Weekend doctor</th><th>Monday doctor</th><th>Why</th></tr></thead><tbody>` +
+    P.filter(show).map(p => `<tr class="${R.doctor[p.i] !== p.prev ? "changed" : ""}"><td>${esc(S.rows[p.i][S.cId])}</td><td>${esc(S.rows[p.i][S.cLoc])}</td><td class="muted">${esc(S.rows[p.i][S.cDoc])}</td>
+      <td><select data-i="${p.i}">${names.map(n => `<option ${n === R.doctor[p.i] ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></td>
+      <td class="muted">${esc(R.reason[p.i])}</td></tr>`).join("") + `</tbody>`;
+  document.querySelectorAll("#patients select").forEach(s => s.onchange = () => {
+    const i = +s.dataset.i; R.doctor[i] = s.value; R.reason[i] = s.value === R.auto[i] ? R.reason[i] : "Changed by hand"; renderResult();
+  });
+}
+$("#filter").onchange = renderResult;
+
+// ---- export: same rows, same order, Monday doctor inserted right after the weekend doctor column ----
+function exportRows() {
+  const ins = (r, v) => [...r.slice(0, S.cDoc + 1), v, ...r.slice(S.cDoc + 1)];
+  const rows = S.rows.map((r, i) => ins(r, S.result.doctor[i]));
+  return S.header ? [ins(S.header, "Monday doctor"), ...rows] : rows;
+}
+async function copyText(t, msg) {
+  try { await navigator.clipboard.writeText(t); }
+  catch (e) { const ta = document.createElement("textarea"); ta.value = t; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); }
+  $("#copied").textContent = msg; setTimeout(() => $("#copied").textContent = "", 4000);
+}
+$("#copyCol").onclick = () => copyText(S.result.doctor.join("\n"), `Copied ${S.result.doctor.length} rows. Paste into the first patient's row.`);
+$("#copyAll").onclick = () => copyText(exportRows().map(r => r.map(c => String(c).replace(/[\t\r\n]+/g, " ")).join("\t")).join("\n"), "Copied the whole table.");
+$("#dl").onclick = () => {
+  const blob = new Blob(["﻿" + exportRows().map(r => r.map(csvCell).join(",")).join("\r\n") + "\r\n"], { type: "text/csv" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+  a.download = `monday_assignments_${new Date().toISOString().slice(0, 10)}.csv`; document.body.appendChild(a); a.click(); a.remove();
+};
+</script>
+</body>
+</html>

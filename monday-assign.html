@@ -114,6 +114,9 @@
       <label>Show: <select id="filter"><option value="">All patients</option></select></label>
     </div>
     <div class="scroll"><table id="patients"></table></div>
+    <h3>Name the new doctors</h3>
+    <p class="help">When the arrangement is final, type each new doctor's last name next to their letter. The names replace the letters in the tables, and in the output: <b>Suggested</b> shows the name, and <b>Final</b> is filled in for their patients. Leave a box empty to keep the letter.</p>
+    <div class="row" id="namesPanel"></div>
   </div>
 </div>
 
@@ -556,7 +559,8 @@ $("#run").onclick = () => {
   S.cfg = getCfg();
   S.result = assignPatients(patientsNow(), roster, S.cfg);
   S.result.auto = S.result.doctor.slice();
-  $("#filter").innerHTML = `<option value="">All patients</option><option value="__changed">Only patients changing doctor</option>` + S.result.docs.map(d => `<option>${esc(d.name)}</option>`).join("");
+  buildNames();
+  $("#filter").innerHTML = `<option value="">All patients</option><option value="__changed">Only patients changing doctor</option>` + S.result.docs.map(d => `<option value="${esc(d.name)}">${esc(label(d.name))}</option>`).join("");
   renderResult();
   $("#resultCard").classList.remove("hidden");
   $("#resultCard").scrollIntoView({ behavior: "smooth" });
@@ -572,7 +576,7 @@ function renderResult() {
   P.forEach(p => { const c = count[R.doctor[p.i]]; if (!c) return; const u = p.isNew ? "New admit" : p.unit; c[u] = (c[u] || 0) + 1; c.total++; });
   const roleName = d => (d.role === "R" ? "Rounding" : "Admitting") + (d.stay ? ", staying" : ", new");
   $("#summary").innerHTML = `<thead><tr><th>Suggested doctor</th><th>Role</th><th class="n">Total</th>${units.map(u => `<th class="n">${esc(u)}</th>`).join("")}<th>Mostly on</th></tr></thead><tbody>` +
-    R.docs.map(d => `<tr class="${d.role === "R" && count[d.name].total > S.cfg.cap ? "over" : ""}"><td><b>${esc(d.name)}</b></td><td class="muted">${roleName(d)}</td><td class="n total">${count[d.name].total}</td>
+    R.docs.map(d => `<tr class="${d.role === "R" && count[d.name].total > S.cfg.cap ? "over" : ""}"><td><b>${esc(label(d.name))}</b>${label(d.name) !== d.name ? ` <span class="muted">(${esc(d.name)})</span>` : ""}</td><td class="muted">${roleName(d)}</td><td class="n total">${count[d.name].total}</td>
       ${units.map(u => `<td class="n ${count[d.name][u] ? "" : "zero"}">${count[d.name][u] || "·"}</td>`).join("")}<td class="muted">${esc(units.filter(u => count[d.name][u]).sort((x, y) => count[d.name][y] - count[d.name][x]).slice(0, 2).join(", "))}</td></tr>`).join("") +
     `<tr><td><b>All</b></td><td></td><td class="n total">${P.length}</td>${units.map(u => `<td class="n">${P.filter(p => (p.isNew ? "New admit" : p.unit) === u).length}</td>`).join("")}<td></td></tr></tbody>`;
 
@@ -591,7 +595,7 @@ function renderResult() {
   $("#patients").innerHTML = `<thead><tr><th>Patient no.</th><th>Bed</th><th>Weekend doctor</th><th>Final</th><th>Suggested</th><th>Why</th></tr></thead><tbody>` +
     P.filter(show).map(p => `<tr class="${R.doctor[p.i] !== p.prev ? "changed" : ""}"><td>${esc(S.rows[p.i][S.cId])}</td><td>${esc(S.rows[p.i][S.cLoc])}</td><td class="muted">${esc(S.rows[p.i][S.cDoc])}</td>
       <td>${esc(finalName(p.i))}</td>
-      <td><select data-i="${p.i}">${names.map(n => `<option ${n === R.doctor[p.i] ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></td>
+      <td><select data-i="${p.i}">${names.map(n => `<option value="${esc(n)}" ${n === R.doctor[p.i] ? "selected" : ""}>${esc(label(n))}</option>`).join("")}</select></td>
       <td class="muted">${esc(R.reason[p.i])}</td></tr>`).join("") + `</tbody>`;
   document.querySelectorAll("#patients select").forEach(s => s.onchange = () => {
     const i = +s.dataset.i; R.doctor[i] = s.value; R.reason[i] = s.value === R.auto[i] ? R.reason[i] : "Changed by hand"; renderResult();
@@ -601,14 +605,24 @@ $("#filter").onchange = renderResult;
 
 // ---- export: same rows, same order. The weekend doctor column becomes "Final" (staying doctors only, blank otherwise)
 //      and "Suggested" (every patient's suggested doctor) is inserted right after it ----
+S.names = S.names || {};
+const label = n => (S.names[n] || "").trim() || n;
+function buildNames() {
+  const news = S.result.docs.filter(d => !d.stay);
+  $("#namesPanel").innerHTML = news.map(d => `<label>${esc(d.name)} <span class="muted">(${d.role === "R" ? "rounding" : "admitting"})</span>: <input type="text" size="14" placeholder="Last name" data-letter="${esc(d.name)}" value="${esc(S.names[d.name] || "")}"></label>`).join("");
+  $("#namesPanel").querySelectorAll("input").forEach(inp => inp.oninput = () => { S.names[inp.dataset.letter] = inp.value; renderResult(); });
+}
 function finalName(i) {
   // keeps the weekend doctor's name when that doctor is staying, even if Suggested moves the patient elsewhere
   const prev = String(S.rows[i][S.cDoc] || "").trim();
-  return S.result.docs.some(x => x.stay && x.name === prev) ? prev : "";
+  if (S.result.docs.some(x => x.stay && x.name === prev)) return prev;
+  // once a new doctor has a name, their patients get it in Final too
+  const d = S.result.doctor[i];
+  return S.result.docs.some(x => !x.stay && x.name === d) && (S.names[d] || "").trim() ? S.names[d].trim() : "";
 }
 function exportRows() {
   const swap = (r, fin, sug) => [...r.slice(0, S.cDoc), fin, sug, ...r.slice(S.cDoc + 1)];
-  const rows = S.rows.map((r, i) => swap(r, finalName(i), S.result.doctor[i]));
+  const rows = S.rows.map((r, i) => swap(r, finalName(i), label(S.result.doctor[i])));
   return S.header ? [swap(S.header, "Final", "Suggested"), ...rows] : rows;
 }
 async function copyText(t, msg) {
@@ -616,7 +630,7 @@ async function copyText(t, msg) {
   catch (e) { const ta = document.createElement("textarea"); ta.value = t; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); }
   $("#copied").textContent = msg; setTimeout(() => $("#copied").textContent = "", 4000);
 }
-$("#copyCol").onclick = () => copyText(S.result.doctor.map((d, i) => finalName(i) + "\t" + d).join("\n"), `Copied ${S.result.doctor.length} rows (Final, Suggested). Paste into the first patient's row of the weekend doctor column.`);
+$("#copyCol").onclick = () => copyText(S.result.doctor.map((d, i) => finalName(i) + "\t" + label(d)).join("\n"), `Copied ${S.result.doctor.length} rows (Final, Suggested). Paste into the first patient's row of the weekend doctor column.`);
 $("#copyAll").onclick = () => copyText(exportRows().map(r => r.map(c => String(c).replace(/[\t\r\n]+/g, " ")).join("\t")).join("\n"), "Copied the whole table.");
 $("#dl").onclick = () => {
   const blob = new Blob(["﻿" + exportRows().map(r => r.map(csvCell).join(",")).join("\r\n") + "\r\n"], { type: "text/csv" });

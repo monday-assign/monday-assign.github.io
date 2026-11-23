@@ -42,6 +42,8 @@
   .row { display:flex; gap:18px; flex-wrap:wrap; align-items:center; margin:8px 0; }
   .muted { color:var(--muted); }
   .pill { display:inline-block; padding:0 8px; border-radius:10px; font-size:12px; border:1px solid var(--line); background:var(--bg); }
+  .giveup { display:flex; flex-wrap:wrap; gap:4px 14px; margin:6px 0 4px; }
+  .giveup label { white-space:nowrap; font-variant-numeric:tabular-nums; }
   details { margin-top:10px; } summary { cursor:pointer; color:var(--muted); }
   .hidden { display:none; }
 </style>
@@ -72,6 +74,7 @@
     <h2><span class="step">2</span>Monday roster</h2>
     <p class="help">Mark what each weekend doctor is doing on Monday, then say how many new doctors are joining. New doctors are named A, B, C…</p>
     <div class="scrollx"><table id="rosterTable"></table></div>
+    <div id="giveUpPanel"></div>
     <div class="row">
       <label>Rounding doctors on Monday (total, including those staying): <input type="number" id="newRound" min="0" max="40" value="10"></label>
       <span class="muted" id="newRoundNote"></span>
@@ -167,11 +170,14 @@ function assignPatients(patients, roster, cfg) {
   const warnings = [], info = [];
   const site = commonSite(patients.map(p => p.loc));
   const P = patients.map((p, i) => Object.assign({ i, prev: String(p.prev || "").trim(), isNew: isNewAdmit(p.prev) }, parseLocation(p.loc, site, cfg)));
+  const giveUp = new Set(roster.giveUp || []);
+  P.forEach(p => { p.released = giveUp.has(p.i) && !p.isNew; });   // a staying rounder chose to give this patient up
+  const noBack = (d, p) => p.released && p.prev === d.name;         // ...so it never goes back to them
   const out = new Array(P.length).fill(""), reason = new Array(P.length).fill("");
 
   const docs = [];
   const mkDoc = (name, role, stay) => { const d = { name, role, stay, home: null, pts: [], ed: 0 }; docs.push(d); return d; };
-  const give = (d, p, why) => { d.pts.push(p); out[p.i] = d.name; reason[p.i] = why; if (p.isED) d.ed++; };
+  const give = (d, p, why) => { d.pts.push(p); out[p.i] = d.name; reason[p.i] = p.released ? `Given up by ${p.prev}. ${why}` : why; if (p.isED) d.ed++; };
   const take = (d, p) => { d.pts.splice(d.pts.indexOf(p), 1); if (p.isED) d.ed--; };
   const status = n => roster.status[n] || "leave";
 
@@ -180,7 +186,8 @@ function assignPatients(patients, roster, cfg) {
   Object.keys(roster.status).forEach(n => { if (status(n) !== "leave") stay[n] = mkDoc(n, status(n) === "admit" ? "A" : "R", true); });
   Object.values(stay).forEach(d => {
     const c = { EW: 0, NS: 0 };
-    P.forEach(p => { if (!p.isNew && p.prev === d.name && c[p.tower] !== undefined) c[p.tower]++; });
+    P.forEach(p => { if (!p.isNew && !p.released && p.prev === d.name && c[p.tower] !== undefined) c[p.tower]++; });
+    if (c.EW + c.NS === 0) P.forEach(p => { if (!p.isNew && p.prev === d.name && c[p.tower] !== undefined) c[p.tower]++; });
     d.home = c.EW + c.NS === 0 ? null : (c.EW >= c.NS ? "EW" : "NS");
   });
 
@@ -189,7 +196,7 @@ function assignPatients(patients, roster, cfg) {
   const pool = { EW: [], NS: [], "?": [] }, edPool = [], newPool = [];
   P.forEach(p => {
     if (p.isNew) { newPool.push(p); return; }
-    const s = stay[p.prev];
+    const s = p.released ? null : stay[p.prev];
     if (s && s.role === "R" && (p.isED || p.tower === "?" || p.tower === s.home)) give(s, p, "Kept (staying doctor)");
     else if (s && s.role === "A" && p.isED) give(s, p, "Kept (staying admitting doctor)");
     else if (p.isED) edPool.push(p);
@@ -241,7 +248,8 @@ function assignPatients(patients, roster, cfg) {
     // 1. shared high-demand units (7E, 7W): dealt out evenly across the whole tower team
     const sharedCount = d => d.pts.filter(q => q.shared).length;
     pool[t].filter(p => p.shared).sort(byPlace).forEach(p => {
-      const d = team.slice().sort((a, b) => sharedCount(a) - sharedCount(b) || unitCount(a, p.unit) - unitCount(b, p.unit) || a.pts.length - b.pts.length)[0];
+      const ok = team.filter(d => !noBack(d, p));
+      const d = (ok.length ? ok : team).slice().sort((a, b) => sharedCount(a) - sharedCount(b) || unitCount(a, p.unit) - unitCount(b, p.unit) || a.pts.length - b.pts.length)[0];
       give(d, p, "Shared high-demand unit " + p.unit);
     });
 
@@ -259,13 +267,15 @@ function assignPatients(patients, roster, cfg) {
       for (let n = 0; n < quota.get(d); n++) {
         const near = p => unitCount(d, p.unit) ? -unitCount(d, p.unit)
           : 100 + Math.min(...d.pts.filter(q => q.floor).map(q => Math.abs(q.floor - p.floor)), 50);
-        const p = rest.slice().sort((a, b) => near(a) - near(b) || byPlace(a, b))[0];
+        const p = rest.filter(q => !noBack(d, q)).sort((a, b) => near(a) - near(b) || byPlace(a, b))[0];
+        if (!p) break;
         rest.splice(rest.indexOf(p), 1); give(d, p, "Added to a staying doctor (nearby patient)");
       }
     });
 
     // 4. new doctors take the rest in order of location, so each gets neighbouring beds
     team.filter(d => !d.stay).forEach(d => rest.splice(0, quota.get(d)).forEach(p => give(d, p, "Pooled and shared out by location")));
+    rest.forEach(p => give(fewest(team.filter(d => !noBack(d, p))) || fewest(team), p, "Pooled and shared out by location"));
   });
   pool["?"].forEach(p => give(fewest(rounders), p, "Unit with unknown tower"));
 
@@ -276,7 +286,7 @@ function assignPatients(patients, roster, cfg) {
       rounders.forEach(from => rounders.forEach(to => {
         const diff = from.pts.length - to.pts.length;
         if (to === from || diff < 2 || (m && diff <= m.diff)) return;
-        const movable = from.pts.filter(p => (p.isED || p.isNew) ? allowED && from.ed > 1 : (p.tower === "?" || p.tower === to.home));
+        const movable = from.pts.filter(p => !noBack(to, p) && ((p.isED || p.isNew) ? allowED && from.ed > 1 : (p.tower === "?" || p.tower === to.home)));
         if (!movable.length) return;
         const score = p => (p.isED ? -20 : 0) - (to.pts.some(q => q.unit === p.unit) ? UNIT_BONUS : 0) - (p.floor && to.pts.some(q => q.floor === p.floor && q.tower === p.tower) ? FLOOR_BONUS : 0)
           + unitCount(from, p.unit) * 0.5 + (p.shared || p.spread ? 50 : 0);
@@ -288,7 +298,7 @@ function assignPatients(patients, roster, cfg) {
   };
 
   // ---- units split evenly among the doctors working that floor (e.g. 4W among the 4E/4W doctors), by swapping so totals stay the same ----
-  const kept = (d, p) => d.stay && p.prev === d.name;
+  const kept = (d, p) => d.stay && p.prev === d.name && !p.released;
   Object.entries(cfg.spread || {}).forEach(([u, grp]) => {
     for (let n = 0; n < 200; n++) {
       const cands = rounders.filter(d => d.pts.filter(q => grp.includes(q.unit)).length >= 3);
@@ -299,8 +309,9 @@ function assignPatients(patients, roster, cfg) {
       // an even split of this unit comes before "staying doctors keep their patients":
       // a staying doctor with too many gives some up and takes a neighbouring patient in exchange
       const pick = (d, l) => l.filter(q => !kept(d, q)).pop() || l[l.length - 1];
-      const p = pick(hi, hi.pts.filter(q => q.unit === u));
-      const back = pick(lo, lo.pts.filter(q => q.unit !== u && grp.includes(q.unit)));
+      const p = pick(hi, hi.pts.filter(q => q.unit === u && !noBack(lo, q)));
+      if (!p) break;
+      const back = pick(lo, lo.pts.filter(q => q.unit !== u && grp.includes(q.unit) && !noBack(hi, q)));
       take(hi, p); give(lo, p, `${u} split evenly among the ${grp.join("/")} doctors`);
       if (back) { take(lo, back); give(hi, back, `Swapped to keep numbers even while splitting ${u}`); }
     }
@@ -316,10 +327,10 @@ function assignPatients(patients, roster, cfg) {
       rounders.forEach(Y => rounders.forEach(X => {
         if (X === Y || X.home !== Y.home) return;
         const pieces = {};
-        Y.pts.forEach(p => { if (!locked(Y, p) && p.tower === X.home) (pieces[p.unit] ||= []).push(p); });
+        Y.pts.forEach(p => { if (!locked(Y, p) && !noBack(X, p) && p.tower === X.home) (pieces[p.unit] ||= []).push(p); });
         Object.entries(pieces).forEach(([u, ps]) => {
           if (unitCount(X, u) <= ps.length) return;            // X must hold the bigger part of this unit
-          const back = X.pts.filter(q => q.unit !== u && !locked(X, q) && q.tower === Y.home)
+          const back = X.pts.filter(q => q.unit !== u && !locked(X, q) && !noBack(Y, q) && q.tower === Y.home)
             .sort((a, b) => (unitCount(Y, a.unit) ? 0 : 1) - (unitCount(Y, b.unit) ? 0 : 1) || unitCount(X, a.unit) - unitCount(X, b.unit) || b.i - a.i)
             .slice(0, ps.length);
           if (back.length < ps.length) return;
@@ -341,8 +352,8 @@ function assignPatients(patients, roster, cfg) {
       multi.forEach(hi => multi.forEach(lo => { if (hi.home === lo.home && sc(hi) - sc(lo) >= 2) pairs.push({ hi, lo, d: sc(hi) - sc(lo) }); }));
       pairs.sort((x, y) => y.d - x.d);
       for (const c of pairs) {
-        const pp = c.hi.pts.filter(x => x.shared && !kept(c.hi, x)).sort((a, b) => unitCount(c.hi, a.unit) - unitCount(c.hi, b.unit))[0];
-        const qq = c.lo.pts.filter(x => !x.shared && !x.isED && !x.isNew && !x.spread && !kept(c.lo, x) && x.tower === c.hi.home)
+        const pp = c.hi.pts.filter(x => x.shared && !kept(c.hi, x) && !noBack(c.lo, x)).sort((a, b) => unitCount(c.hi, a.unit) - unitCount(c.hi, b.unit))[0];
+        const qq = c.lo.pts.filter(x => !x.shared && !x.isED && !x.isNew && !x.spread && !kept(c.lo, x) && !noBack(c.hi, x) && x.tower === c.hi.home)
           .sort((a, b) => (unitCount(c.hi, b.unit) ? 1 : 0) - (unitCount(c.hi, a.unit) ? 1 : 0) || unitCount(c.lo, a.unit) - unitCount(c.lo, b.unit))[0];
         if (pp && qq) { pair = c; p = pp; q = qq; break; }
       }
@@ -363,7 +374,7 @@ function assignPatients(patients, roster, cfg) {
   // ---- ED patients: every rounding doctor (staying ones too) gets one; the rest are divided between the admitting doctors ----
   const lowest = list => list.slice().sort((a, b) => a.pts.length - b.pts.length || a.ed - b.ed)[0];
   edPool.forEach(p => {
-    const d = lowest(rounders.filter(r => r.ed < 1));
+    const d = lowest(rounders.filter(r => r.ed < 1 && !noBack(r, p)));
     if (d) give(d, p, "ED patient (one per rounding doctor)");
     else if (admits.length) give(lowest(admits), p, "ED patient shared between the admitting doctors");
     else give(lowest(rounders), p, "ED patient (no admitting doctor on the roster)");
@@ -399,8 +410,8 @@ function assignPatients(patients, roster, cfg) {
       if (heavyMax - lightMin < 2 || bridge.pts.length >= heavyMax) break;
       const donors = heavyTeam.filter(d => d.pts.length > lightMin && d.pts.length - bridge.pts.length >= 1);
       const stayNames = rounders.filter(d => d.stay).map(d => d.name);
-      const pooled = p => !stayNames.includes(p.prev);   // came from a leaving doctor, not from a staying rounder's weekend list
-      const candOf = allowKept => donors.flatMap(d => d.pts.filter(p => !p.isED && !p.isNew && p.tower === heavy && (allowKept || pooled(p))).map(p => ({ d, p })));
+      const pooled = p => p.released || !stayNames.includes(p.prev);   // came from a leaving doctor, not from a staying rounder's weekend list
+      const candOf = allowKept => donors.flatMap(d => d.pts.filter(p => !p.isED && !p.isNew && p.tower === heavy && !noBack(bridge, p) && (allowKept || pooled(p))).map(p => ({ d, p })));
       let cands = candOf(false);
       if (!cands.length) cands = candOf(true);
       if (!cands.length) break;
@@ -423,7 +434,7 @@ function assignPatients(patients, roster, cfg) {
       const st = team.filter(d => d.stay).sort((a, b) => a.pts.length - b.pts.length)[0];
       const nw = team.filter(d => !d.stay).sort((a, b) => b.pts.length - a.pts.length)[0];
       if (!st || !nw || nw.pts.length <= st.pts.length) break;
-      const movable = nw.pts.filter(p => !p.isED && !p.isNew && p.tower === t);
+      const movable = nw.pts.filter(p => !p.isED && !p.isNew && p.tower === t && !noBack(st, p));
       if (!movable.length) break;
       const score = p => -10 * unitCount(st, p.unit) - (p.floor && st.pts.some(q => q.floor === p.floor && q.tower === t) ? 3 : 0) + (p.spread || p.shared ? 50 : 0);
       const p = movable.slice().sort((a, b) => score(a) - score(b) || b.i - a.i)[0];
@@ -435,9 +446,9 @@ function assignPatients(patients, roster, cfg) {
     // look across every new doctor with more patients, and take the one that best fits the roamer's units and floors
     const givers = rounders.filter(d => !d.stay && d.pts.length > bridge.pts.length);
     const stayNames = rounders.filter(d => d.stay).map(d => d.name);
-    const cands = givers.flatMap(d => d.pts.filter(p => !p.isED && !p.isNew && (p.tower === bridge.home || p.tower === heavy)).map(p => ({ d, p })));
+    const cands = givers.flatMap(d => d.pts.filter(p => !p.isED && !p.isNew && !noBack(bridge, p) && (p.tower === bridge.home || p.tower === heavy)).map(p => ({ d, p })));
     if (!cands.length) break;
-    const score = ({ d, p }) => -10 * unitCount(bridge, p.unit) - (p.floor && bridge.pts.some(q => q.floor === p.floor && q.tower === p.tower) ? 5 : 0) + (p.spread || p.shared ? 50 : 0) + (stayNames.includes(p.prev) ? 8 : 0) - d.pts.length / 10;
+    const score = ({ d, p }) => -10 * unitCount(bridge, p.unit) - (p.floor && bridge.pts.some(q => q.floor === p.floor && q.tower === p.tower) ? 5 : 0) + (p.spread || p.shared ? 50 : 0) + (stayNames.includes(p.prev) && !p.released ? 8 : 0) - d.pts.length / 10;
     const { d: nw, p } = cands.slice().sort((x, y) => score(x) - score(y) || y.p.i - x.p.i)[0];
     take(nw, p); give(bridge, p, "Extra patient to a staying doctor (numbers can't be exactly even)");
   }
@@ -562,7 +573,8 @@ function buildRoster() {
     ${blanks.length ? line("Empty doctor cell", blanks.length, "fix before assigning") : ""}
   </table></div>`;
   if (na) $("#loadInfo").insertAdjacentHTML("beforeend", `<div class="box ok newadmit">${na} row(s) are new admits waiting to be seen.</div>`);
-  $("#rosterCard").classList.remove("hidden"); updateNewNote(); updateRoamer();
+  $("#giveUpPanel").innerHTML = "";   // a new list: start with nothing ticked
+  $("#rosterCard").classList.remove("hidden"); updateNewNote(); updateRoamer(); buildGiveUp();
   $("#resultCard").classList.add("hidden");
 }
 
@@ -583,12 +595,33 @@ function updateRoamer() {
   $("#roamer").value = [...$("#roamer").options].some(o => o.value === keep) ? keep : "auto";
   $("#roamerNote").textContent = "A roamer only helps if they work in the less busy tower; the app tells you if not.";
 }
-$("#rosterTable").onchange = () => { updateNewNote(); updateRoamer(); };
+// optional: a staying rounder can pick exact patients to give up; anything not ticked follows the usual rules
+function buildGiveUp() {
+  const pts = patientsNow();
+  const stayers = [...document.querySelectorAll("#rosterTable select")].filter(s => s.value === "round").map(s => s.dataset.doc);
+  const ticked = new Set([...document.querySelectorAll("#giveUpPanel input:checked")].map(c => +c.dataset.i));
+  if (!stayers.length) { $("#giveUpPanel").innerHTML = ""; return; }
+  $("#giveUpPanel").innerHTML = `<h3>Patients a staying rounder wants to give up (optional)</h3>
+    <p class="help">Tick the beds each staying rounder would like to hand over. Ticked patients go to other doctors. Anything not ticked is handled as usual, so the app may still move a few more to keep numbers even.</p>` +
+    stayers.map(n => {
+      const mine = pts.map((p, i) => ({ p, i })).filter(x => String(x.p.prev).trim() === n);
+      const k = mine.filter(x => ticked.has(x.i)).length;
+      return `<details${k ? " open" : ""}><summary>${esc(n)}: <span class="gcount">${k ? k + " to give up" : "none chosen"}</span></summary>
+        <div class="giveup">${mine.map(x => `<label><input type="checkbox" data-i="${x.i}"${ticked.has(x.i) ? " checked" : ""}> ${esc(x.p.loc)}</label>`).join("")}</div></details>`;
+    }).join("");
+}
+$("#giveUpPanel").onchange = e => {
+  const det = e.target.closest("details"); if (!det) return;
+  const k = det.querySelectorAll("input:checked").length;
+  det.querySelector(".gcount").textContent = k ? k + " to give up" : "none chosen";
+};
+$("#rosterTable").onchange = () => { updateNewNote(); updateRoamer(); buildGiveUp(); };
 $("#run").onclick = () => {
   const status = {};
   document.querySelectorAll("#rosterTable select").forEach(s => status[s.dataset.doc] = s.value);
   const stayN = Object.values(status).filter(v => v === "round").length;
-  const roster = { status, newRound: Math.max(0, (+$("#newRound").value || 0) - stayN), newAdmit: Math.max(0, +$("#newAdmit").value || 0) };
+  const giveUp = [...document.querySelectorAll("#giveUpPanel input:checked")].map(c => +c.dataset.i).filter(i => status[String(S.rows[i][S.cDoc]).trim()] === "round");
+  const roster = { status, giveUp, newRound: Math.max(0, (+$("#newRound").value || 0) - stayN), newAdmit: Math.max(0, +$("#newAdmit").value || 0) };
   S.cfg = getCfg();
   S.result = assignPatients(patientsNow(), roster, S.cfg);
   S.result.auto = S.result.doctor.slice();

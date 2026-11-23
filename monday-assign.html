@@ -391,12 +391,16 @@ function assignPatients(patients, roster, cfg) {
     }
     else bridge = byFewest(lightTeam.filter(d => d.stay)) || byFewest(lightTeam);
     for (let n = 0; n < 300 && bridge; n++) {
-      const from = rounders.filter(d => d !== bridge && d.pts.some(p => !p.isED && !p.isNew && p.tower === heavy))
-        .sort((a, b) => b.pts.length - a.pts.length)[0];
-      // keep going while the giver has 2+ more than the lightest doctor in the lighter tower (the bridge doctor passes patients on)
+      // the roamer picks up pooled patients (from leaving doctors) first; a staying rounder's own patients only if nothing else is left
       const lightMin = Math.min(...lightTeam.map(d => d.pts.length));
-      if (!from || from.pts.length - lightMin < 2 || from.pts.length - bridge.pts.length < 1) break;
-      const movable = from.pts.filter(p => !p.isED && !p.isNew && p.tower === heavy);
+      const movableOf = (d, allowKept) => d.pts.filter(p => !p.isED && !p.isNew && p.tower === heavy && (allowKept || !kept(d, p)));
+      const pickFrom = allowKept => rounders.filter(d => d !== bridge && movableOf(d, allowKept).length
+          && d.pts.length - lightMin >= 2 && d.pts.length - bridge.pts.length >= 1)   // keep going while the giver has 2+ more than the lightest doctor in the lighter tower
+        .sort((a, b) => b.pts.length - a.pts.length)[0];
+      let from = pickFrom(false), usedKept = false;
+      if (!from) { from = pickFrom(true); usedKept = true; }
+      if (!from) break;
+      const movable = movableOf(from, usedKept);
       // by location: keep the bridge doctor's patients from the other tower together, take from the giver's least common unit
       const score = p => -10 * unitCount(bridge, p.unit) - (p.floor && bridge.pts.some(q => q.floor === p.floor && q.tower === heavy) ? 3 : 0)
         + unitCount(from, p.unit) + (p.spread || p.shared ? 50 : 0);

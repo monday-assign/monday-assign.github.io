@@ -672,7 +672,12 @@ $("#filter").onchange = renderResult;
 // ---- export: same rows, same order. The weekend doctor column becomes "Final" (staying doctors only, blank otherwise)
 //      and "Suggested" (every patient's suggested doctor) is inserted right after it ----
 S.names = S.names || {};
-const label = n => (S.names[n] || "").trim() || n;
+// a staying doctor shows as their last name ("Bourne, Stephanie Christine, MD" -> "Bourne"); full name only if two share a last name
+const lastName = n => { const t = String(n).trim(); if (t.includes(",")) return t.split(",")[0].trim();
+  const w = t.replace(/^dr\.?\s+/i, "").replace(/,?\s*(md|do|mbbs|frcpc)\.?$/i, "").trim().split(/\s+/); return w[w.length - 1] || t; };
+const short = n => { const d = S.result && S.result.docs.find(x => x.name === n); if (!d || !d.stay) return n;
+  const ln = lastName(n); return S.result.docs.filter(x => x.stay && lastName(x.name) === ln).length > 1 ? n : ln; };
+const label = n => (S.names[n] || "").trim() || short(n);
 function buildNames() {
   const news = S.result.docs.filter(d => !d.stay);
   $("#namesPanel").innerHTML = news.map(d => `<label>${esc(d.name)} <span class="muted">(${d.role === "R" ? "rounding" : "admitting"})</span>: <input type="text" size="14" placeholder="Last name" data-letter="${esc(d.name)}" value="${esc(S.names[d.name] || "")}"></label>`).join("");
@@ -681,14 +686,12 @@ function buildNames() {
 function finalName(i, named) {
   // keeps the weekend doctor's name when that doctor is staying, even if Suggested moves the patient elsewhere
   const prev = String(S.rows[i][S.cDoc] || "").trim();
-  if (S.result.docs.some(x => x.stay && x.name === prev)) return prev;
-  // in the named version, a new doctor's patients get the doctor's name in Final too
-  const d = S.result.doctor[i];
-  return named && S.result.docs.some(x => !x.stay && x.name === d) ? label(d) : "";
+  // Final is the starting template: only staying doctors' names, blank for everyone else (named or not)
+  return S.result.docs.some(x => x.stay && x.name === prev) ? prev : "";
 }
 function exportRows(named) {
   const swap = (r, fin, sug) => [...r.slice(0, S.cDoc), fin, sug, ...r.slice(S.cDoc + 1)];
-  const rows = S.rows.map((r, i) => swap(r, finalName(i, named), named ? label(S.result.doctor[i]) : S.result.doctor[i]));
+  const rows = S.rows.map((r, i) => swap(r, finalName(i), named ? label(S.result.doctor[i]) : short(S.result.doctor[i])));
   return S.header ? [swap(S.header, "Final", "Suggested"), ...rows] : rows;
 }
 async function copyText(t, msg) {
@@ -696,7 +699,7 @@ async function copyText(t, msg) {
   catch (e) { const ta = document.createElement("textarea"); ta.value = t; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); }
   $("#copied").textContent = msg; setTimeout(() => $("#copied").textContent = "", 4000);
 }
-$("#copyCol").onclick = () => copyText(S.result.doctor.map((d, i) => finalName(i) + "\t" + d).join("\n"), `Copied ${S.result.doctor.length} rows (Final, Suggested). Paste into the first patient's row of the weekend doctor column.`);
+$("#copyCol").onclick = () => copyText(S.result.doctor.map((d, i) => finalName(i) + "\t" + short(d)).join("\n"), `Copied ${S.result.doctor.length} rows (Final, Suggested). Paste into the first patient's row of the weekend doctor column.`);
 $("#copyAll").onclick = () => copyText(exportRows(false).map(r => r.map(c => String(c).replace(/[\t\r\n]+/g, " ")).join("\t")).join("\n"), "Copied the whole table.");
 function downloadCsv(named) {
   const blob = new Blob(["﻿" + exportRows(named).map(r => r.map(csvCell).join(",")).join("\r\n") + "\r\n"], { type: "text/csv" });
@@ -720,7 +723,7 @@ async function copyNamed(text, msg) {
   if (!namesComplete()) return;
   await copyText(text, msg); $("#namedMsg").textContent = msg; setTimeout(() => $("#namedMsg").textContent = "", 4000);
 }
-$("#copyNamed").onclick = () => copyNamed(S.result.doctor.map((d, i) => finalName(i, true) + "\t" + label(d)).join("\n"), `Copied ${S.result.doctor.length} named rows (Final, Suggested).`);
+$("#copyNamed").onclick = () => copyNamed(S.result.doctor.map((d, i) => finalName(i) + "\t" + label(d)).join("\n"), `Copied ${S.result.doctor.length} named rows (Final, Suggested).`);
 $("#copyAllNamed").onclick = () => copyNamed(exportRows(true).map(r => r.map(c => String(c).replace(/[\t\r\n]+/g, " ")).join("\t")).join("\n"), "Copied the whole named table.");
 $("#dlNamed").onclick = () => { if (namesComplete()) downloadCsv(true); };
 </script>

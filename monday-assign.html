@@ -391,20 +391,24 @@ function assignPatients(patients, roster, cfg) {
     }
     else bridge = byFewest(lightTeam.filter(d => d.stay)) || byFewest(lightTeam);
     for (let n = 0; n < 300 && bridge; n++) {
-      // the roamer picks up pooled patients (from leaving doctors) first; a staying rounder's own patients only if nothing else is left
+      // the roamer picks up unassigned (pooled) patients first, from whichever doctor holds them (usually a new rounder),
+      // preferring ordinary units (not 7E/7W or 4W) and staying on one floor; a staying rounder's own patients only if nothing else is left
       const lightMin = Math.min(...lightTeam.map(d => d.pts.length));
-      const movableOf = (d, allowKept) => d.pts.filter(p => !p.isED && !p.isNew && p.tower === heavy && (allowKept || !kept(d, p)));
-      const pickFrom = allowKept => rounders.filter(d => d !== bridge && movableOf(d, allowKept).length
-          && d.pts.length - lightMin >= 2 && d.pts.length - bridge.pts.length >= 1)   // keep going while the giver has 2+ more than the lightest doctor in the lighter tower
-        .sort((a, b) => b.pts.length - a.pts.length)[0];
-      let from = pickFrom(false), usedKept = false;
-      if (!from) { from = pickFrom(true); usedKept = true; }
-      if (!from) break;
-      const movable = movableOf(from, usedKept);
-      // by location: keep the bridge doctor's patients from the other tower together, take from the giver's least common unit
-      const score = p => -10 * unitCount(bridge, p.unit) - (p.floor && bridge.pts.some(q => q.floor === p.floor && q.tower === heavy) ? 3 : 0)
-        + unitCount(from, p.unit) + (p.spread || p.shared ? 50 : 0);
-      const p = movable.slice().sort((a, b) => score(a) - score(b) || b.i - a.i)[0];
+      const heavyTeam = rounders.filter(d => d.home === heavy && d !== bridge);
+      const heavyMax = Math.max(...heavyTeam.map(d => d.pts.length));
+      if (heavyMax - lightMin < 2 || bridge.pts.length >= heavyMax) break;
+      const donors = heavyTeam.filter(d => d.pts.length > lightMin && d.pts.length - bridge.pts.length >= 1);
+      const stayNames = rounders.filter(d => d.stay).map(d => d.name);
+      const pooled = p => !stayNames.includes(p.prev);   // came from a leaving doctor, not from a staying rounder's weekend list
+      const candOf = allowKept => donors.flatMap(d => d.pts.filter(p => !p.isED && !p.isNew && p.tower === heavy && (allowKept || pooled(p))).map(p => ({ d, p })));
+      let cands = candOf(false);
+      if (!cands.length) cands = candOf(true);
+      if (!cands.length) break;
+      const onFloor = f => cands.filter(c => c.p.floor === f && !c.p.spread && !c.p.shared).length;
+      const score = ({ d, p }) => (p.spread || p.shared ? 50 : 0) + (pooled(p) ? 0 : 30)
+        - 10 * unitCount(bridge, p.unit) - (p.floor && bridge.pts.some(q => q.floor === p.floor && q.tower === heavy) ? 20 : 0)
+        - (bridge.pts.some(q => q.tower === heavy) ? 0 : onFloor(p.floor))   /* first pick: the floor with the most to take, so they stay on one floor */ - d.pts.length + unitCount(d, p.unit) / 10;
+      const { d: from, p } = cands.slice().sort((x, y) => score(x) - score(y) || y.p.i - x.p.i)[0];
       take(from, p); give(bridge, p, `Moved to ${bridge.name}, the roamer (covers both towers), to even out numbers`);
       bridged++;
       evenOut(false); // the bridge doctor passes some of their own-tower patients to colleagues
@@ -428,12 +432,13 @@ function assignPatients(patients, roster, cfg) {
   });
   // a staying roamer covers both towers, so they can also take an extra from a new doctor in either tower
   if (bridge && bridge.stay) for (let n = 0; n < 100; n++) {
-    const nw = rounders.filter(d => !d.stay && d.pts.length > bridge.pts.length).sort((a, b) => b.pts.length - a.pts.length)[0];
-    if (!nw) break;
-    const movable = nw.pts.filter(p => !p.isED && !p.isNew && (p.tower === bridge.home || p.tower === heavy));
-    if (!movable.length) break;
-    const score = p => -10 * unitCount(bridge, p.unit) - (p.floor && bridge.pts.some(q => q.floor === p.floor && q.tower === p.tower) ? 3 : 0) + (p.spread || p.shared ? 50 : 0);
-    const p = movable.slice().sort((a, b) => score(a) - score(b) || b.i - a.i)[0];
+    // look across every new doctor with more patients, and take the one that best fits the roamer's units and floors
+    const givers = rounders.filter(d => !d.stay && d.pts.length > bridge.pts.length);
+    const stayNames = rounders.filter(d => d.stay).map(d => d.name);
+    const cands = givers.flatMap(d => d.pts.filter(p => !p.isED && !p.isNew && (p.tower === bridge.home || p.tower === heavy)).map(p => ({ d, p })));
+    if (!cands.length) break;
+    const score = ({ d, p }) => -10 * unitCount(bridge, p.unit) - (p.floor && bridge.pts.some(q => q.floor === p.floor && q.tower === p.tower) ? 5 : 0) + (p.spread || p.shared ? 50 : 0) + (stayNames.includes(p.prev) ? 8 : 0) - d.pts.length / 10;
+    const { d: nw, p } = cands.slice().sort((x, y) => score(x) - score(y) || y.p.i - x.p.i)[0];
     take(nw, p); give(bridge, p, "Extra patient to a staying doctor (numbers can't be exactly even)");
   }
   if (!bridge && cfg.roamer === "none" && avgOf("EW") !== null && avgOf("NS") !== null && Math.abs(avgOf("EW") - avgOf("NS")) >= 1)

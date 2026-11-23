@@ -77,8 +77,9 @@
       <span class="muted" id="newRoundNote"></span>
     </div>
     <div class="row">
-      <label><input type="checkbox" id="roamer" checked> Allow a roamer: one rounding doctor may cover both towers to even out numbers</label>
-      <span class="muted">Untick to keep every doctor in one tower, even if the numbers end up slightly uneven.</span>
+      <label>Roamer (one rounding doctor who may cover both towers to even out numbers):
+        <select id="roamer"><option value="auto">Automatic (a staying rounder first)</option><option value="none">No roamer</option><option value="new">A new doctor</option></select></label>
+      <span class="muted" id="roamerNote"></span>
       <label>New admitting doctors: <input type="number" id="newAdmit" min="0" max="10" value="2"></label>
     </div>
     <details>
@@ -376,13 +377,19 @@ function assignPatients(patients, roster, cfg) {
   let bridge = null, bridged = 0, heavy = null;
   const spreadAll = () => Math.max(...rounders.map(d => d.pts.length)) - Math.min(...rounders.map(d => d.pts.length));
   const avgOf = t => { const l = rounders.filter(d => d.home === t); return l.length ? l.reduce((n, d) => n + d.pts.length, 0) / l.length : null; };
-  if (cfg.roamer && spreadAll() >= 2 && avgOf("EW") !== null && avgOf("NS") !== null && Math.abs(avgOf("EW") - avgOf("NS")) >= 1) {
+  if (cfg.roamer !== "none" && spreadAll() >= 2 && avgOf("EW") !== null && avgOf("NS") !== null && Math.abs(avgOf("EW") - avgOf("NS")) >= 1) {
     heavy = avgOf("EW") > avgOf("NS") ? "EW" : "NS";
     const light = heavy === "EW" ? "NS" : "EW";
     const lightTeam = rounders.filter(d => d.home === light);
     // a staying rounder in the lighter tower is preferred as the roamer; otherwise a new one
     const byFewest = l => l.slice().sort((a, b) => a.pts.length - b.pts.length)[0];
-    bridge = byFewest(lightTeam.filter(d => d.stay)) || byFewest(lightTeam);
+    if (cfg.roamer === "new") bridge = byFewest(lightTeam.filter(d => !d.stay)) || null;
+    else if (cfg.roamer.startsWith("stay:")) {
+      const chosen = rounders.find(d => d.stay && d.name === cfg.roamer.slice(5));
+      if (chosen && chosen.home === light) bridge = chosen;
+      else if (chosen) info.push(`${chosen.name} works in the ${towerName[heavy]} tower, which is the busier one today, so roaming wouldn't even out the numbers. No roamer was used; choose a doctor from the ${towerName[light]} tower instead.`);
+    }
+    else bridge = byFewest(lightTeam.filter(d => d.stay)) || byFewest(lightTeam);
     for (let n = 0; n < 300 && bridge; n++) {
       const from = rounders.filter(d => d !== bridge && d.pts.some(p => !p.isED && !p.isNew && p.tower === heavy))
         .sort((a, b) => b.pts.length - a.pts.length)[0];
@@ -425,8 +432,8 @@ function assignPatients(patients, roster, cfg) {
     const p = movable.slice().sort((a, b) => score(a) - score(b) || b.i - a.i)[0];
     take(nw, p); give(bridge, p, "Extra patient to a staying doctor (numbers can't be exactly even)");
   }
-  if (!bridge && !cfg.roamer && avgOf("EW") !== null && avgOf("NS") !== null && Math.abs(avgOf("EW") - avgOf("NS")) >= 1)
-    info.push(`Roamer is off, so the towers are uneven: the old (E/W) tower averages ${avgOf("EW").toFixed(1)} patients per doctor and the new (N/S) tower ${avgOf("NS").toFixed(1)}. Tick "Allow a roamer" to even them out.`);
+  if (!bridge && cfg.roamer === "none" && avgOf("EW") !== null && avgOf("NS") !== null && Math.abs(avgOf("EW") - avgOf("NS")) >= 1)
+    info.push(`Roamer is off, so the towers are uneven: the old (E/W) tower averages ${avgOf("EW").toFixed(1)} patients per doctor and the new (N/S) tower ${avgOf("NS").toFixed(1)}. Choose a roamer to even them out.`);
 
   consolidate(); // final location tidy-up after all balancing (swaps only, totals unchanged)
 
@@ -500,7 +507,7 @@ function parseSpread(v) {
   return m;
 }
 function getCfg() {
-  return { cap: Math.max(1, +$("#cap").value || 18), roamer: $("#roamer").checked,            shared: listOf($("#shared").value), spread: parseSpread($("#spread").value), nsExtra: listOf($("#nsExtra").value), ewExtra: listOf($("#ewExtra").value) };
+  return { cap: Math.max(1, +$("#cap").value || 18), roamer: $("#roamer").value,            shared: listOf($("#shared").value), spread: parseSpread($("#spread").value), nsExtra: listOf($("#nsExtra").value), ewExtra: listOf($("#ewExtra").value) };
 }
 function patientsNow() { return S.rows.map(r => ({ loc: r[S.cLoc], prev: r[S.cDoc] })); }
 
@@ -546,7 +553,7 @@ function buildRoster() {
     ${blanks.length ? line("Empty doctor cell", blanks.length, "fix before assigning") : ""}
   </table></div>`;
   if (na) $("#loadInfo").insertAdjacentHTML("beforeend", `<div class="box ok newadmit">${na} row(s) are new admits waiting to be seen.</div>`);
-  $("#rosterCard").classList.remove("hidden"); updateNewNote();
+  $("#rosterCard").classList.remove("hidden"); updateNewNote(); updateRoamer();
   $("#resultCard").classList.add("hidden");
 }
 
@@ -556,7 +563,18 @@ function updateNewNote() {
   $("#newRoundNote").textContent = total < stayN ? `⚠ ${stayN} rounding doctors are staying, which is more than ${total}.` : `${stayN} staying + ${total - stayN} new (named A, B…)`;
 }
 $("#newRound").oninput = updateNewNote;
-$("#rosterTable").onchange = updateNewNote;
+// roamer choices: the staying rounders, each labelled with the tower they work in
+function updateRoamer() {
+  const cfg = getCfg(), pts = patientsNow(), site = commonSite(pts.map(p => p.loc));
+  const keep = $("#roamer").value;
+  const stayers = [...document.querySelectorAll("#rosterTable select")].filter(s => s.value === "round").map(s => s.dataset.doc);
+  const towerOf = n => { const c = { EW: 0, NS: 0 }; pts.forEach(p => { if (String(p.prev).trim() === n) { const t = parseLocation(p.loc, site, cfg).tower; if (t in c) c[t]++; } }); return c.EW + c.NS ? (c.EW >= c.NS ? "old tower" : "new tower") : "no ward patients"; };
+  $("#roamer").innerHTML = `<option value="auto">Automatic (a staying rounder first)</option><option value="none">No roamer</option><option value="new">A new doctor</option>` +
+    stayers.map(n => `<option value="stay:${esc(n)}">${esc(n)} (${towerOf(n)})</option>`).join("");
+  $("#roamer").value = [...$("#roamer").options].some(o => o.value === keep) ? keep : "auto";
+  $("#roamerNote").textContent = "A roamer only helps if they work in the less busy tower; the app tells you if not.";
+}
+$("#rosterTable").onchange = () => { updateNewNote(); updateRoamer(); };
 $("#run").onclick = () => {
   const status = {};
   document.querySelectorAll("#rosterTable select").forEach(s => status[s.dataset.doc] = s.value);

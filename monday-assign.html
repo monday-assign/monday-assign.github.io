@@ -53,7 +53,7 @@
 
   <div class="card">
     <h2><span class="step">1</span>Load the anonymized list</h2>
-    <p class="help">Choose the CSV file, or copy the rows from Excel and paste them in the box. Rows are never reordered or removed.</p>
+    <p class="help">The list has two columns: <b>bed location</b> and <b>weekend doctor</b>, one patient per row. Choose the CSV file, or copy the two columns from Excel and paste them in the box. Rows are never reordered or removed.</p>
     <div class="row">
       <input type="file" id="file" accept=".csv,.txt,.tsv">
       <span class="muted">or</span>
@@ -466,7 +466,7 @@ function parseTable(text) {
 }
 const csvCell = v => /[",\r\n]/.test(v) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v);
 
-let S = { rows: [], header: null, cId: 0, cLoc: 1, cDoc: 2, result: null, weekend: [] };
+let S = { rows: [], header: null, cLoc: 0, cDoc: 1, result: null, weekend: [] };
 
 $("#file").onchange = async e => { const f = e.target.files[0]; if (f) loadText(await f.text(), f.name); };
 $("#togglePaste").onclick = () => $("#pasteArea").classList.toggle("hidden");
@@ -485,13 +485,12 @@ function loadText(text, label) {
   const cols = [...Array(width).keys()];
   S.cDoc = cols.slice().sort((a, b) => score(b, /,|\bMD\b|new adm/i) - score(a, /,|\bMD\b|new adm/i))[0];
   S.cLoc = cols.filter(c => c !== S.cDoc).sort((a, b) => score(b, /[A-Za-z].*\d|\bED\b/) - score(a, /[A-Za-z].*\d|\bED\b/))[0] ?? 1;
-  S.cId = cols.filter(c => c !== S.cDoc && c !== S.cLoc).sort((a, b) => score(b, /^\s*\d+\s*$/) - score(a, /^\s*\d+\s*$/))[0] ?? 0;
   $("#loadInfo").innerHTML = `<div class="box ok">Loaded <b>${rows.length}</b> patients from ${esc(label)}${S.header ? " (first row used as headings)" : ""}.</div>`;
   const name = c => S.header ? `${S.header[c] || "Column " + (c + 1)}` : `Column ${c + 1} (e.g. ${String(rows[0][c]).slice(0, 22) || "empty"})`;
   const sel = (id, lab, v) => `<label>${lab}: <select id="${id}">${cols.map(c => `<option value="${c}" ${c === v ? "selected" : ""}>${esc(name(c))}</option>`).join("")}</select></label>`;
-  $("#colPick").innerHTML = sel("cId", "Patient number", S.cId) + sel("cLoc", "Bed location", S.cLoc) + sel("cDoc", "Weekend doctor", S.cDoc);
+  $("#colPick").innerHTML = sel("cLoc", "Bed location", S.cLoc) + sel("cDoc", "Weekend doctor", S.cDoc);
   $("#colPick").classList.remove("hidden");
-  ["cId", "cLoc", "cDoc"].forEach(id => $("#" + id).onchange = e => { S[id] = +e.target.value; buildRoster(); });
+  ["cLoc", "cDoc"].forEach(id => $("#" + id).onchange = e => { S[id] = +e.target.value; buildRoster(); });
   buildRoster();
 }
 
@@ -527,8 +526,8 @@ function buildRoster() {
   $("#loadInfo").querySelectorAll(".newadmit").forEach(x => x.remove());
   const blanks = S.rows.filter(r => isBlank(r[S.cDoc]));
   if (blanks.length) {
-    const ids = blanks.map(r => String(r[S.cId]).trim() || "(no number)");
-    $("#loadInfo").insertAdjacentHTML("beforeend", `<div class="box bad newadmit"><b>${blanks.length} row(s) have an empty Weekend doctor cell</b> (patient no. ${esc(ids.slice(0, 30).join(", "))}${ids.length > 30 ? ", …" : ""}).
+    const ids = blanks.map(r => S.rows.indexOf(r) + 1);
+    $("#loadInfo").insertAdjacentHTML("beforeend", `<div class="box bad newadmit"><b>${blanks.length} row(s) have an empty Weekend doctor cell</b> (row ${esc(ids.slice(0, 30).join(", "))}${ids.length > 30 ? ", …" : ""}).
       Fill in the doctor's name, or type "New admit" if the patient is waiting to be seen, then load the list again. Assigning is turned off until this is fixed.</div>`);
   }
   $("#run").disabled = blanks.length > 0;
@@ -599,8 +598,8 @@ function renderResult() {
   const f = $("#filter").value;
   const names = R.docs.map(d => d.name);
   const show = p => !f || (f === "__changed" ? R.doctor[p.i] !== p.prev : R.doctor[p.i] === f);
-  $("#patients").innerHTML = `<thead><tr><th>Patient no.</th><th>Bed</th><th>Weekend doctor</th><th>Final</th><th>Suggested</th><th>Why</th></tr></thead><tbody>` +
-    P.filter(show).map(p => `<tr class="${R.doctor[p.i] !== p.prev ? "changed" : ""}"><td>${esc(S.rows[p.i][S.cId])}</td><td>${esc(S.rows[p.i][S.cLoc])}</td><td class="muted">${esc(S.rows[p.i][S.cDoc])}</td>
+  $("#patients").innerHTML = `<thead><tr><th>Row</th><th>Bed</th><th>Weekend doctor</th><th>Final</th><th>Suggested</th><th>Why</th></tr></thead><tbody>` +
+    P.filter(show).map(p => `<tr class="${R.doctor[p.i] !== p.prev ? "changed" : ""}"><td class="muted">${p.i + 1}</td><td>${esc(S.rows[p.i][S.cLoc])}</td><td class="muted">${esc(S.rows[p.i][S.cDoc])}</td>
       <td>${esc(finalName(p.i))}</td>
       <td><select data-i="${p.i}">${names.map(n => `<option value="${esc(n)}" ${n === R.doctor[p.i] ? "selected" : ""}>${esc(label(n))}</option>`).join("")}</select></td>
       <td class="muted">${esc(R.reason[p.i])}</td></tr>`).join("") + `</tbody>`;
